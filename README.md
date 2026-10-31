@@ -64,6 +64,8 @@ To use it, create a GitHub repository, upload/push the contents of this project 
 
 ## Try the app
 
+Opening the app from the launcher sends `ACTION_MAIN`; this is a normal launch and displays the waiting screen. Only `ACTION_SEND` and `ACTION_SEND_MULTIPLE` are passed to the share importer.
+
 1. Install the debug APK on an Android device.
 2. Open Facebook, Instagram, YouTube, or another app.
 3. Use its Share action and select **FilterBridge Lab**.
@@ -93,3 +95,10 @@ Per-category overrides can independently set `NONE`, `WARNING`, `BLUR`, or `STRI
 ## Architecture rule
 
 Platform adapters may depend on `filter-core`; `filter-core` must never depend on Android APIs or a social platform. Future Facebook, Instagram, YouTube, Share, file-picker, and MediaProjection adapters must all produce the same core content model.
+
+
+## Confirm that the launcher-fix build is installed
+
+The corrected build displays `Build 0.1.1 · launcher-intent-fix` directly under the subtitle. Its Android package version is `0.1.1-launcher-fix` (versionCode 2). If the screen still displays `Unsupported share action: android.intent.action.MAIN`, the installed APK is not this build.
+
+For a clean test, download the artifact from the newest successful Actions run after pushing this project. If Android reports an APK signature conflict, uninstall the prior FilterBridge Lab first, then install this APK.

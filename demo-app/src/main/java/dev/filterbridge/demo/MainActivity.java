@@ -53,8 +53,14 @@ public final class MainActivity extends Activity {
         TextView subtitle = new TextView(this);
         subtitle.setText("Offline filtering SDK · Share/import proof of concept");
         subtitle.setTextSize(14);
-        subtitle.setPadding(0, dp(6), 0, dp(18));
+        subtitle.setPadding(0, dp(6), 0, dp(4));
         column.addView(subtitle);
+
+        TextView buildLabel = new TextView(this);
+        buildLabel.setText("Build 0.1.1 · launcher-intent-fix");
+        buildLabel.setTextSize(11);
+        buildLabel.setPadding(0, 0, 0, dp(14));
+        column.addView(buildLabel);
 
         contentView = new TextView(this);
         contentView.setTextSize(15);
@@ -96,8 +102,13 @@ public final class MainActivity extends Activity {
     }
 
     private void handleIncoming(android.content.Intent intent) {
-        if (intent == null || intent.getAction() == null) {
-            contentView.setText("Share text, an image, a video, or audio from another app to begin.");
+        // ACTION_MAIN is the normal launcher action. Only ACTION_SEND and
+        // ACTION_SEND_MULTIPLE represent content shares for this activity.
+        if (intent == null
+                || (!android.content.Intent.ACTION_SEND.equals(intent.getAction())
+                && !android.content.Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))) {
+            inboundContent = null;
+            contentView.setText("Ready to receive content. Share text, an image, a video, or audio from another app and choose FilterBridge Lab.");
             resultView.setText("Waiting for shared content.");
             return;
         }
