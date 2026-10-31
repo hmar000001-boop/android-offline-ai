@@ -1,108 +1,49 @@
-# FilterBridge Lab 0.1.1 — Quick Device Test
+# FilterBridge Lab 0.2.2 — device test plan
 
-This guide tests the current proof of concept. It does **not** test AI classification because no on-device model is connected yet.
+## A. Install
 
-## A. Build a fresh APK on GitHub
+1. Push the full project to GitHub.
+2. Open **Actions** and wait for the newest **Android CI** run to succeed.
+3. Download `filterbridge-lab-debug-apk-*` from the run's Artifacts section.
+4. Extract the artifact ZIP and install the APK.
+5. Confirm the app subtitle shows `Build 0.2.2-direct-media-picker` (or the exact Gradle version name).
 
-1. Extract the complete project ZIP.
-2. Copy the **contents** of `filterbridge-poc-launcher-fix/` into the root of your GitHub repository. The `.github` directory must be included.
-3. Commit and push the changes (or upload the files using GitHub's web interface).
-4. Open the repository's **Actions** tab and select the newest `Android CI` run.
-5. Wait for the job `Test and build debug APK` to finish successfully.
-6. Open that run and download the artifact named `filterbridge-debug-apk-...`.
-7. Extract the artifact ZIP. It contains `demo-app-debug.apk`.
+## B. Photo import
 
-The workflow runs the `filter-core` unit tests and builds the debug APK. It installs JDK 17, Android SDK Platform 36, Build Tools 36.0.0, and Gradle 9.6.0. The APK is for testing, not Play Store release.
+1. Open FilterBridge Lab.
+2. Tap **Choose photo**.
+3. Select a normal JPEG or PNG in Android's system picker.
+4. Confirm the preview appears and the details show `IMAGE`, MIME type, file name, approximate size, and preview dimensions.
+5. Tap **Analyze on device**.
+6. Expected: `STATUS: NOT_ANALYZED`, `POLICY: UNVERIFIED`, and a message that no local classifier is installed.
 
-## B. Install it
+Try a large image and a rotated phone photo to exercise downsampling and EXIF orientation. No broad storage permission should be requested.
 
-1. Transfer `demo-app-debug.apk` to the Android phone or download it directly there.
-2. Install it. If Android reports a signature conflict with an older debug build, uninstall the old FilterBridge Lab and install this APK again.
-3. Open FilterBridge Lab from the launcher.
+## C. Video import
 
-Expected first screen:
+1. Tap **Choose video**.
+2. Select a short MP4 or another supported video.
+3. Confirm video playback controls appear.
+4. Tap play to check that the selected URI is readable.
+5. Tap **Analyze on device**.
+6. Expected: video duration, dimensions when available, and 0–6 extracted frame samples. Samples are discarded after the preflight. The result remains `NOT_ANALYZED` / `UNVERIFIED` because no detector is present.
 
-- Build label: `Build 0.1.1 · launcher-intent-fix`
-- Main message: `Ready to receive content...`
-- Result: `Waiting for shared content.`
-- No `Unsupported share action: android.intent.action.MAIN` error.
+## D. Settings
 
-## C. Quick test (about 2–3 minutes)
+1. Tap **Filtering settings**.
+2. Change the global level (Off, Warning, Blur, Strict).
+3. Change activation and hide confidence thresholds.
+4. Choose a category and set a category-specific override.
+5. Add a custom category ID, e.g. `smoking`.
+6. Save, close and reopen settings. Confirm values persist.
 
-### Test 1 — text/link share
+## E. Clear and offline
 
-1. Open Chrome and visit `https://example.com`.
-2. Open Chrome's menu and choose **Share**.
-3. Choose **FilterBridge Lab** from Android's Sharesheet. It may be under **More** or require scrolling.
+1. Tap **Clear** and confirm the selected preview disappears.
+2. Enable Airplane mode.
+3. Choose and preview a photo again.
+4. Confirm no network connection is required.
 
-Expected in FilterBridge Lab:
+## Expected scope
 
-- `Import source: SHARE_SHEET`
-- `Platform hint: UNKNOWN`
-- `Attachments: 0`
-- The shared `https://example.com` link appears under `Shared text / URL`.
-- Result says the item was imported but no model has run yet.
-
-### Test 2 — image share
-
-1. Open Gallery or Google Photos.
-2. Select one ordinary photo.
-3. Tap **Share** and select **FilterBridge Lab**.
-
-Expected:
-
-- `Import source: SHARE_SHEET`
-- `Attachments: 1`
-- One `IMAGE` entry with a display name, MIME type (for example `image/jpeg`) and size (if exposed by the provider).
-
-The exact filename, MIME type and size depend on the device and image provider.
-
-### Test 3 — run and clear
-
-1. After importing either item, tap **Run filtering pipeline**.
-2. Expected: `Analysis status: NOT_ANALYZED` and `Policy action: UNVERIFIED`.
-3. Tap **Clear imported content**.
-4. Expected: the app returns to `Waiting for shared content.`
-
-`UNVERIFIED` is intentional: the analyzer is a placeholder. It does not mean the content is safe or that an AI model inspected it.
-
-## D. Further share tests
-
-Try one item at a time, then multiple items:
-
-- YouTube: share a video link. A URL is imported; the underlying YouTube video is **not** downloaded or extracted.
-- Instagram and Facebook: share a post/link when the source app offers sharing.
-- Gallery: share multiple images, if the Gallery app provides a multi-select share action.
-- My Files: share a local video and an audio file.
-
-For media, the expected result is a matching attachment kind (`IMAGE`, `VIDEO`, or `AUDIO`) and metadata. The demo does not yet decode or analyse media bytes.
-
-## E. What this milestone does and does not prove
-
-It does prove, when the corresponding test succeeds:
-
-- The Android launcher action is not mistaken for a share.
-- Android can route supported `ACTION_SEND` / `ACTION_SEND_MULTIPLE` content to this app.
-- The share adapter can create the platform-neutral content representation and report available metadata.
-- The demo can call the deterministic filtering pipeline with its placeholder analyzer.
-- The core policy unit tests exercise decisions such as blur, hide, allow, and unverified for synthetic analysis results.
-
-It does **not** prove:
-
-- Real AI image, video, audio, OCR, speech, profanity, music, or contextual detection.
-- Automatic blur, muting, or removal in the UI.
-- Full Facebook, Instagram, or YouTube feed access.
-- That a shared social-media URL exposes the media behind it.
-- Production-grade persistence of URI permissions or long-running media processing.
-
-## F. If FilterBridge Lab does not appear in the Sharesheet
-
-1. Confirm that the newly built APK is installed and the launcher shows `0.1.1`.
-2. Use a standard file or photo and share it from Gallery, Photos, or My Files.
-3. Check the MIME type supported by the sender (text, image, video, or audio).
-4. Expand the Sharesheet's full app list or tap **More**.
-5. If it still does not appear, send the Android version, the source app, the type of item, and a screenshot of the expanded Sharesheet.
-
-## Current confirmed device result
-
-The user-provided screenshot of build `0.1.1 · launcher-intent-fix` shows the normal launcher opening the waiting screen without the old `ACTION_MAIN` import error. Share-intent handling still needs the tests above.
+These tests prove direct local file selection, URI access, preview decoding, bounded video preflight (when supported), local settings persistence, and the deterministic policy engine's fail-closed and coverage-aware behaviour. They do **not** prove AI detection or content safety. Do not treat `UNVERIFIED` as safe.

@@ -18,4 +18,5 @@ android {
 
 dependencies {
     implementation(project(":filter-core"))
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
 }

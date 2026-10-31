@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "filterbridge-poc"
+rootProject.name = "filterbridge-lab"
 include(":filter-core", ":android-ingest", ":demo-app")

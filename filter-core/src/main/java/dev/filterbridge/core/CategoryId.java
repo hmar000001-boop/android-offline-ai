@@ -1,6 +1,9 @@
 package dev.filterbridge.core;
 
 import java.util.Locale;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -19,6 +22,11 @@ public final class CategoryId {
     public static final CategoryId GAMBLING = of("gambling");
     public static final CategoryId FLIRTING = of("flirting");
 
+    private static final Set<CategoryId> BUILT_INS = Collections.unmodifiableSet(
+            new LinkedHashSet<>(java.util.Arrays.asList(NUDITY, SUGGESTIVE,
+                    SEXUALIZED_ILLUSTRATION, MUSIC, PROFANITY, VIOLENCE,
+                    ALCOHOL, DRUGS, GAMBLING, FLIRTING)));
+
     private final String value;
 
     private CategoryId(String value) {
@@ -32,6 +40,11 @@ public final class CategoryId {
             throw new IllegalArgumentException("Invalid category id: " + rawValue);
         }
         return new CategoryId(normalized);
+    }
+
+    /** Categories enabled by the initial product policy. Custom categories are added separately. */
+    public static Set<CategoryId> builtIns() {
+        return BUILT_INS;
     }
 
     public String value() {

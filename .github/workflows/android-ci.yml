@@ -41,6 +41,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.6.0'
+          cache-provider: basic
 
       - name: Show build tool versions
         run: |
@@ -53,14 +54,28 @@ jobs:
           gradle --no-daemon --stacktrace --console=plain
           clean
           :filter-core:test
+          :demo-app:lintDebug
           :demo-app:assembleDebug
+
+      - name: Write build metadata
+        if: success()
+        run: |
+          mkdir -p build-artifacts
+          {
+            echo "version=0.2.2-direct-media-picker"
+            echo "commit=${GITHUB_SHA}"
+            echo "run=${GITHUB_RUN_NUMBER}"
+            echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > build-artifacts/build-info.txt
 
       - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: filterbridge-debug-apk-${{ github.run_number }}
-          path: demo-app/build/outputs/apk/debug/*.apk
+          name: filterbridge-lab-debug-apk-${{ github.run_number }}
+          path: |
+            demo-app/build/outputs/apk/debug/*.apk
+            build-artifacts/build-info.txt
           if-no-files-found: error
           retention-days: 14
 

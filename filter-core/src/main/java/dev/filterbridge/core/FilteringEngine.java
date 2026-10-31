@@ -12,8 +12,25 @@ public final class FilteringEngine {
         this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine");
     }
 
+    /**
+     * Executes analysis and converts runtime/model failures into FAILED + UNVERIFIED.
+     * It deliberately does not convert an exception into an empty, successful result.
+     */
     public FilteringOutcome analyze(AnalysisRequest request, FilteringPolicy policy) {
-        AnalysisResult analysis = analyzer.analyze(request);
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(policy, "policy");
+        AnalysisResult analysis;
+        try {
+            analysis = analyzer.analyze(request);
+            if (analysis == null) {
+                analysis = AnalysisResult.failed("The analyzer returned no result.");
+            }
+        } catch (RuntimeException exception) {
+            String detail = exception.getMessage();
+            analysis = AnalysisResult.failed(detail == null || detail.trim().isEmpty()
+                    ? "The on-device analyzer failed."
+                    : "The on-device analyzer failed: " + detail);
+        }
         return new FilteringOutcome(analysis, policyEngine.decide(analysis, policy));
     }
 }

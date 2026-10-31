@@ -10,8 +10,8 @@ android {
         applicationId = "dev.filterbridge.demo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1-launcher-fix"
+        versionCode = 5
+        versionName = "0.2.2-direct-media-picker"
     }
 
     compileOptions {
@@ -23,4 +23,5 @@ android {
 dependencies {
     implementation(project(":filter-core"))
     implementation(project(":android-ingest"))
+    implementation("androidx.activity:activity:1.13.0")
 }
