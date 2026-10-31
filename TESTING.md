@@ -1,40 +1,29 @@
-# FilterBridge Lab 0.3.1 test guide
+# Test plan — 0.3.2
 
-## Build/CI gate
+## CI gates
+- Viddexa model download/export, immutable revision and labels validation.
+- Owen XS download at immutable revision, exact SHA-256 and file-size verification.
+- ONNX input/output contract validation and smoke inference for Owen XS.
+- PyTorch-to-ONNX parity checks for Viddexa.
+- Core unit tests and Android lint/build.
 
-- CI downloads the pinned Hugging Face revision and exports ONNX.
-- Export script rejects changed labels, wrong dimensions, unexpected image preprocessing, invalid ONNX graphs and PyTorch/ONNX parity error greater than 1e-3.
-- Core tests validate stable softmax, output-to-category mapping, non-finite output rejection and partial coverage behaviour.
-- Android lint runs for `android-ingest`, `ai-runtime-onnx`, and `demo-app`.
+## Device test
+1. Enable Airplane mode and turn Wi-Fi off.
+2. Choose a normal photo and run analysis.
+3. Verify two model reports appear, not one.
+4. Verify Viddexa displays `normal (upstream label safe)` rather than claiming the image is safe.
+5. Verify Owen displays `NSFL`, `NSFW`, `SFW` and the highest-class note.
+6. Choose a second image where the Viddexa model predicted normal/safe but expected content is adult. Observe whether Owen's broad NSFW score differs. Do not use this as a final benchmark with one image.
+7. Confirm that a high NSFW score creates `adult_visual_content` evidence and invokes the configured policy.
+8. Confirm that an SFW/normal result from one model never cancels a positive detection from the other.
+9. Select a video and verify it remains NOT_ANALYZED in this release.
+10. Restore filtering thresholds after any forced-policy tests.
 
-## Quick device test (2–5 minutes)
+## Accuracy evaluation
+Use a legally obtained and consented, labelled test set. Separate explicit nudity, suggestive imagery, ordinary portraits, beach/sports, artwork, anime, medical/non-sexual exposures and common negatives. Record per-class precision, recall, F1, confusion matrix, false positives and false negatives. Never report vendor metrics as FilterBridge accuracy.
 
-1. Install the APK from the latest successful `Android CI` workflow run.
-2. Enable Airplane mode before starting the test.
-3. Open the app and select **Choose photo**.
-4. Select a photo and wait for its preview.
-5. Press **Analyze on device**.
-6. Expected: the five class scores appear; analysis status is `PARTIALLY_ANALYZED`; category coverage is `INCOMPLETE`; the model/revision is identified.
-7. A detection above the current policy's activation confidence can trigger a whole-image pixelation or hide action. An incomplete analysis is also pixelated under the balanced default. This is not region-level blur.
-8. Tap **Reveal once** to restore the original image for this viewing session.
-9. Select a video. Playback is initially hidden. Tap Analyze to see `NOT_ANALYZED` / `UNVERIFIED`, or explicitly tap **Reveal unfiltered video once** to play it without filtering.
-
-If the app says the model asset is missing, the installed APK did not come from a successful CI run that completed the model-export step. A local Gradle build without running the model exporter will deliberately fail closed.
-
-## Model quality evaluation
-
-Do not validate a content classifier using one or two images. Use a curated, lawful, representative evaluation set with labels separated by:
-
-- Explicit nudity / explicit sexual content
-- Suggestive clothing / poses / framing
-- Ordinary skin exposure (sports, beach, medical, non-sexual contexts)
-- Sexualized illustration / non-sexual drawing
-- Safe ordinary images
-
-Record precision, recall, F1, confusion matrix, false-positive and false-negative examples, per-class thresholds, and performance by image source/quality. Keep a separate hold-out test set. Obtain consent and rights for any media used in model evaluation; do not put sensitive test images in a public repository or CI artifact.
-
-The upstream reported evaluation metrics belong to the model publisher and must not be described as FilterBridge accuracy. `sexy` is experimental because the model card contains conflicting descriptions and an explicit-nudity-only intended-use statement.
-
-## Device performance evaluation
-
-Record device model, Android version, RAM class, image dimensions, model initialization time, first-inference latency, warmed latency, peak app memory, battery/thermal behaviour and app package size. Repeat with multiple image sizes and image formats. These measurements have not yet been produced by CI.
+## Known tests still required
+- Run on the target Samsung phone.
+- Compare Android image preprocessing against reference Pillow preprocessing with pixel-level golden fixtures.
+- Run a held-out semantic image benchmark; ONNX smoke inference alone does not prove classification quality.
+- Measure latency, memory, heat and battery.

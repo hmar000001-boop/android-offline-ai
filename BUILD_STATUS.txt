@@ -1,10 +1,12 @@
-FilterBridge Lab 0.3.1-local-image-classifier
+FilterBridge Lab 0.3.2 — dual local image classifiers
 
-Source status: first local still-image classifier integration is implemented in this archive.
-Pure Java core compilation: passed with Java 17.
-Core test methods: 21 passed using a temporary JUnit-compatible local harness; GitHub Actions will run the official JUnit 4.13.2 Gradle test task.
-Model exporter Python syntax: passed.
-Model download/export and PyTorch-to-ONNX parity: not run locally; GitHub Actions performs this step on the pinned revision.
-Android Gradle build/lint: not run in this environment (Android SDK/Gradle unavailable).
-APK status: not generated here. GitHub Actions must pass model export, unit tests, Android lint and assembleDebug before an APK is produced.
-Android image decode/resize preprocessing parity against the pinned Hugging Face PIL processor: not yet measured on a physical device; CI verifies PyTorch-to-ONNX graph parity on preprocessed tensors.
+Source validation completed in the authoring environment:
+- 28 pure-Java core tests passed using a Java 17 test harness.
+- Python exporter scripts passed py_compile.
+- New Owen runtime classes compiled against API-compatible Android/ONNX stubs for Java syntax/type-shape checks.
+- Android manifest XML and GitHub Actions YAML syntax checked.
+- Full Android Gradle build was NOT executed in this environment (Android SDK/Gradle are unavailable).
+- Owen Hugging Face model download and ONNX smoke test are configured in CI but have NOT been executed by us. GitHub Actions must be run on the new commit.
+- Device inference for both models is NOT yet verified.
+
+Do not call this release production-ready. The app supports experimental still-image classification only. Video, music, speech/profanity, alcohol, drugs, gambling, complete violence, and flirting/interaction analysis are not implemented. Category coverage remains incomplete and policy must remain fail-closed.

@@ -49,6 +49,14 @@ jobs:
           test -s ai-runtime-onnx/src/main/assets/models/VIDDEXA-MODEL-CARD.md
           python -m json.tool model-export-summary.json > /dev/null
 
+      - name: Download and verify independent Owen XS safety classifier
+        run: |
+          python tools/model-export/install_owen_xs.py | tee owen-model-install.log
+          test -s ai-runtime-onnx/src/main/assets/models/owen-image-safety-xs.onnx
+          test -s ai-runtime-onnx/src/main/assets/models/owen-image-safety-xs.properties
+          test -s ai-runtime-onnx/src/main/assets/models/OWEN-IMAGE-SAFETY-MODEL-CARD.md
+          python -m json.tool build/owen-xs-export-summary.json > /dev/null
+
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
@@ -92,16 +100,20 @@ jobs:
         run: |
           mkdir -p build-artifacts
           {
-            echo "version=0.3.1-local-image-classifier"
+            echo "version=0.3.2-dual-local-image-classifier"
             echo "commit=${GITHUB_SHA}"
             echo "run=${GITHUB_RUN_NUMBER}"
             echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "model=viddexa/nsfw-detection-2-nano"
             echo "model_revision=12e57200346246b37382f746e4d94d10b014f6a1"
             echo "onnx_sha256=$(grep '^onnxSha256=' ai-runtime-onnx/src/main/assets/models/model.properties | cut -d= -f2-)"
+            echo "owen_model=OwenElliott/image-safety-classifier-xs"
+            echo "owen_model_revision=606ad3dfd6a023215e3ab0797040437cc365977b"
+            echo "owen_onnx_sha256=$(grep '^onnxSha256=' ai-runtime-onnx/src/main/assets/models/owen-image-safety-xs.properties | cut -d= -f2-)"
             echo "source_weights_sha256=$(grep '^sourceWeightsSha256=' ai-runtime-onnx/src/main/assets/models/model.properties | cut -d= -f2-)"
           } > build-artifacts/build-info.txt
           cp ai-runtime-onnx/src/main/assets/models/model.properties build-artifacts/
+          cp ai-runtime-onnx/src/main/assets/models/owen-image-safety-xs.properties build-artifacts/
 
       - name: Upload debug APK and model manifest
         if: success()
@@ -114,6 +126,8 @@ jobs:
             build-artifacts/model.properties
             model-export-summary.json
             model-export.log
+            build/owen-xs-export-summary.json
+            owen-model-install.log
           if-no-files-found: error
           retention-days: 14
 
@@ -128,5 +142,7 @@ jobs:
             **/build/reports/lint-results-*.html
             model-export-summary.json
             model-export.log
+            build/owen-xs-export-summary.json
+            owen-model-install.log
           if-no-files-found: ignore
           retention-days: 14

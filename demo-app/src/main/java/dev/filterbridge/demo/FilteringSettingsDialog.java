@@ -166,8 +166,13 @@ public final class FilteringSettingsDialog {
     private String[] categoryLabels(List<String> ids) {
         String[] labels = new String[ids.size()];
         for (int i = 0; i < ids.size(); i++) {
-            String value = ids.get(i).replace('_', ' ').replace('-', ' ');
-            labels[i] = Character.toUpperCase(value.charAt(0)) + value.substring(1);
+            String id = ids.get(i);
+            if ("adult_visual_content".equals(id)) {
+                labels[i] = "Adult visual content (broad NSFW)";
+            } else {
+                String value = id.replace('_', ' ').replace('-', ' ');
+                labels[i] = Character.toUpperCase(value.charAt(0)) + value.substring(1);
+            }
         }
         return labels;
     }

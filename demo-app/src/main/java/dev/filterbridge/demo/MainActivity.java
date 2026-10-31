@@ -29,8 +29,12 @@ import dev.filterbridge.android.ingest.ImagePreviewDecoder;
 import dev.filterbridge.android.ingest.MediaPickerRepository;
 import dev.filterbridge.android.ingest.PickedMedia;
 import dev.filterbridge.core.MediaKind;
+import dev.filterbridge.core.CompositeContentAnalyzer;
 import dev.filterbridge.core.PolicyAction;
 import dev.filterbridge.runtime.onnx.ViddexaNanoImageAnalyzer;
+import dev.filterbridge.runtime.onnx.OwenXsImageSafetyAnalyzer;
+
+import java.util.Arrays;
 
 import java.text.DecimalFormat;
 import java.util.concurrent.ExecutorService;
@@ -85,7 +89,9 @@ public final class MainActivity extends ComponentActivity {
         settingsStore = new FilteringSettingsStore(this);
         // ONNX model weights are embedded by the GitHub CI export step. If they are missing,
         // the analyzer reports FAILED/UNVERIFIED rather than silently behaving as an empty model.
-        analysisService = new MediaAnalysisService(new ViddexaNanoImageAnalyzer(getApplicationContext()));
+        analysisService = new MediaAnalysisService(new CompositeContentAnalyzer(Arrays.asList(
+                new ViddexaNanoImageAnalyzer(getApplicationContext()),
+                new OwenXsImageSafetyAnalyzer(getApplicationContext()))));
         registerPickers();
         buildUi();
 

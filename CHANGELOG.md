@@ -29,3 +29,12 @@
 - No AI model was connected in that version.
 
 - Protect newly selected images with a pixelated preview until analysis or an explicit one-time reveal when filtering is enabled.
+
+## 0.3.2 — dual local image classifiers
+- Added OwenElliott Image Safety Classifier XS as a second, independently pinned ONNX image model.
+- Added broad `adult_visual_content` category. Owen's NSFW output is not misrepresented as separate nudity/suggestive classes.
+- Added experimental NSFL visual-distress signal, explicitly marked as underrepresented by the publisher.
+- Added a composite analyzer: one model's SFW/normal class can never cancel another model's positive detection.
+- Changed Viddexa `safe` UI wording to `normal (upstream label safe)` and added explicit "not a safety verdict" language.
+- GitHub CI now downloads, checksum-verifies, ONNX-validates and smoke-runs both model assets before packaging them in the APK.
+- Other visual, audio, speech and video categories remain unimplemented or experimental; no full-coverage claim is made.

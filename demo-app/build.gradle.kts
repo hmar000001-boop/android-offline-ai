@@ -10,8 +10,8 @@ android {
         applicationId = "dev.filterbridge.demo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.3.1-local-image-classifier"
+        versionCode = 8
+        versionName = "0.3.2-dual-local-image-classifier"
     }
 
     compileOptions {

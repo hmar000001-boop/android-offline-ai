@@ -71,12 +71,20 @@ public final class ViddexaNanoOutputMapper {
         for (int i = 0; i < LABELS.size(); i++) {
             if (i > 0) message.append(" · ");
             String label = LABELS.get(i);
-            message.append(label).append('=')
+            String displayLabel = "safe".equals(label) ? "normal (upstream label safe)" : label;
+            message.append(displayLabel).append('=')
                     .append(String.format(Locale.ROOT, "%.1f%%", scores.get(label) * 100.0d));
         }
-        message.append(". The 'sexy' score is experimental and is not sufficient to verify suggestive content. ")
+        String topLabel = LABELS.get(0);
+        for (String label : LABELS) {
+            if (scores.get(label) > scores.get(topLabel)) topLabel = label;
+        }
+        message.append(". Top Viddexa class: ")
+                .append("safe".equals(topLabel) ? "NORMAL (upstream class label: safe)" : topLabel.toUpperCase(Locale.ROOT))
+                .append(". This is a classifier prediction, NOT a safety verdict. ")
+                .append("The 'sexy' score is experimental and is not sufficient to verify suggestive content. ")
                 .append("The model card describes explicit nudity as its intended use. ")
-                .append("No enabled category is certified fully covered by this experimental adapter.");
+                .append("A NORMAL prediction can be a false negative; all enabled categories remain unverified.");
         return new AnalysisResult(AnalysisStatus.PARTIALLY_ANALYZED, detections,
                 Collections.emptySet(), partial, message.toString());
     }

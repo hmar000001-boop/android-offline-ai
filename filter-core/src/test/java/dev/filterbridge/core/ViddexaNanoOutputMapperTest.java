@@ -20,6 +20,18 @@ public class ViddexaNanoOutputMapperTest {
     }
 
     @Test
+    public void aHundredPercentNormalClassIsNotASafetyVerdict() {
+        AnalysisResult result = ViddexaNanoOutputMapper.toAnalysisResult(
+                new float[]{100.0f, -100.0f, -100.0f, -100.0f, -100.0f});
+        FilteringPolicy policy = FilteringPolicy.balancedDefault();
+        PolicyDecision decision = new PolicyEngine().decide(result, policy);
+        assertEquals(AnalysisStatus.PARTIALLY_ANALYZED, result.status());
+        assertEquals(PolicyAction.UNVERIFIED, decision.action());
+        assertFalse(decision.analysisComplete());
+        assertTrue(result.message().contains("NOT a safety verdict"));
+    }
+
+    @Test
     public void invalidOutputIsRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> ViddexaNanoOutputMapper.probabilities(new float[]{1, 2}));

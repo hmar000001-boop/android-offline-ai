@@ -26,7 +26,7 @@ public final class FilteringSettingsStore {
     private static final String KEY_CUSTOM = "custom.categories";
 
     private static final List<String> BUILT_INS = Collections.unmodifiableList(Arrays.asList(
-            "nudity", "suggestive", "sexualized_illustration", "music", "profanity",
+            "nudity", "adult_visual_content", "suggestive", "sexualized_illustration", "music", "profanity",
             "violence", "alcohol", "drugs", "gambling", "flirting"));
 
     private final SharedPreferences preferences;

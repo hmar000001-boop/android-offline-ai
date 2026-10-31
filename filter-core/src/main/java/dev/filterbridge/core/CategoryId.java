@@ -12,6 +12,8 @@ public final class CategoryId {
     private static final Pattern VALID = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
 
     public static final CategoryId NUDITY = of("nudity");
+    /** Broad NSFW visual signal; does not distinguish nudity from suggestive content. */
+    public static final CategoryId ADULT_VISUAL_CONTENT = of("adult_visual_content");
     public static final CategoryId SUGGESTIVE = of("suggestive");
     public static final CategoryId SEXUALIZED_ILLUSTRATION = of("sexualized_illustration");
     public static final CategoryId MUSIC = of("music");
@@ -23,7 +25,7 @@ public final class CategoryId {
     public static final CategoryId FLIRTING = of("flirting");
 
     private static final Set<CategoryId> BUILT_INS = Collections.unmodifiableSet(
-            new LinkedHashSet<>(java.util.Arrays.asList(NUDITY, SUGGESTIVE,
+            new LinkedHashSet<>(java.util.Arrays.asList(NUDITY, ADULT_VISUAL_CONTENT, SUGGESTIVE,
                     SEXUALIZED_ILLUSTRATION, MUSIC, PROFANITY, VIOLENCE,
                     ALCOHOL, DRUGS, GAMBLING, FLIRTING)));
 
