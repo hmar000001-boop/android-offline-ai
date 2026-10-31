@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No exported components or permissions are required in the adapter library. -->
+</manifest>
