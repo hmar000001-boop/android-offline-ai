@@ -29,7 +29,8 @@ import dev.filterbridge.android.ingest.ImagePreviewDecoder;
 import dev.filterbridge.android.ingest.MediaPickerRepository;
 import dev.filterbridge.android.ingest.PickedMedia;
 import dev.filterbridge.core.MediaKind;
-import dev.filterbridge.core.NotConfiguredAnalyzer;
+import dev.filterbridge.core.PolicyAction;
+import dev.filterbridge.runtime.onnx.ViddexaNanoImageAnalyzer;
 
 import java.text.DecimalFormat;
 import java.util.concurrent.ExecutorService;
@@ -63,6 +64,7 @@ public final class MainActivity extends ComponentActivity {
 
     private PickedMedia selectedMedia;
     private Bitmap imagePreviewBitmap;
+    private Bitmap filteredPreviewBitmap;
     private boolean selectedUriPermissionPersisted;
 
     private ImageView imagePreview;
@@ -73,6 +75,7 @@ public final class MainActivity extends ComponentActivity {
     private TextView selectionStatus;
     private Button analyzeButton;
     private Button clearButton;
+    private Button revealButton;
     private ProgressBar progressBar;
 
     @Override
@@ -80,8 +83,9 @@ public final class MainActivity extends ComponentActivity {
         super.onCreate(savedInstanceState);
         mediaRepository = new MediaPickerRepository(this);
         settingsStore = new FilteringSettingsStore(this);
-        // Replace this composition binding with the validated local model runtime when selected.
-        analysisService = new MediaAnalysisService(new NotConfiguredAnalyzer());
+        // ONNX model weights are embedded by the GitHub CI export step. If they are missing,
+        // the analyzer reports FAILED/UNVERIFIED rather than silently behaving as an empty model.
+        analysisService = new MediaAnalysisService(new ViddexaNanoImageAnalyzer(getApplicationContext()));
         registerPickers();
         buildUi();
 
@@ -168,6 +172,12 @@ public final class MainActivity extends ComponentActivity {
         previewFrame.addView(videoPreview, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(250), Gravity.CENTER));
         previewCard.addView(previewFrame, matchWrap());
+        revealButton = secondaryButton("Reveal once");
+        revealButton.setVisibility(View.GONE);
+        revealButton.setOnClickListener(v -> revealSelectedMediaOnce());
+        LinearLayout.LayoutParams revealParams = matchWrap();
+        revealParams.topMargin = dp(8);
+        previewCard.addView(revealButton, revealParams);
 
         mediaDetails = text("No media selected", 13, COLOR_MUTED, false);
         mediaDetails.setPadding(0, dp(12), 0, dp(2));
@@ -275,7 +285,9 @@ public final class MainActivity extends ComponentActivity {
                     setBusy(false);
                     analysisStatus.setTextColor(COLOR_MUTED);
                     analysisStatus.setText("Ready. No AI analysis has been performed yet.");
-                    setSelectionStatus("Selected locally. Tap Analyze on device to run the current pipeline.");
+                    setSelectionStatus(isFilteringEnabled()
+                            ? "Selected locally. The image preview is pixelated until analysis; use Reveal once to view it unfiltered."
+                            : "Selected locally. Filtering is disabled in your settings; this image has not been analysed.");
                 });
             } catch (Exception exception) {
                 if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
@@ -295,12 +307,22 @@ public final class MainActivity extends ComponentActivity {
 
     private void renderSelectedMedia() {
         if (selectedMedia == null) return;
+        clearFilteredPreview();
+        revealButton.setVisibility(View.GONE);
         if (selectedMedia.kind() == MediaKind.IMAGE) {
+            revealButton.setText("Reveal once");
             stopVideoPreview();
             videoPreview.setVisibility(View.GONE);
             emptyPreview.setVisibility(View.GONE);
             imagePreview.setVisibility(View.VISIBLE);
             imagePreview.setImageBitmap(imagePreviewBitmap);
+            if (imagePreviewBitmap != null && isFilteringEnabled()) {
+                // Do not expose a newly selected, unanalysed image before the detector runs.
+                // The user can explicitly reveal it once, or run analysis first.
+                showPixelatedImage();
+                revealButton.setText("Reveal unfiltered image once");
+                revealButton.setVisibility(View.VISIBLE);
+            }
             String dimensionText = imagePreviewBitmap == null ? "" : "\nPreview: " +
                     imagePreviewBitmap.getWidth() + " × " + imagePreviewBitmap.getHeight() + " px";
             mediaDetails.setText(formatMediaDetails(selectedMedia) + dimensionText);
@@ -309,8 +331,13 @@ public final class MainActivity extends ComponentActivity {
             imagePreviewBitmap = null;
             imagePreview.setImageDrawable(null);
             imagePreview.setVisibility(View.GONE);
-            emptyPreview.setVisibility(View.GONE);
-            videoPreview.setVisibility(View.VISIBLE);
+            // No video inference exists in this release. Do not expose unfiltered playback by
+            // default; require an explicit one-time reveal until a video pipeline is connected.
+            emptyPreview.setText("Video analysis is not available yet. Playback is hidden until you explicitly reveal it.");
+            emptyPreview.setVisibility(View.VISIBLE);
+            videoPreview.setVisibility(View.GONE);
+            revealButton.setText("Reveal unfiltered video once");
+            revealButton.setVisibility(View.VISIBLE);
             MediaController controller = new MediaController(this);
             controller.setAnchorView(videoPreview);
             videoPreview.setMediaController(controller);
@@ -321,7 +348,8 @@ public final class MainActivity extends ComponentActivity {
                 return true;
             });
             videoPreview.setVideoURI(selectedMedia.uri());
-            mediaDetails.setText(formatMediaDetails(selectedMedia) + "\nPress play to preview the video.");
+            mediaDetails.setText(formatMediaDetails(selectedMedia)
+                    + "\nVideo frames and audio are not analysed in this release.");
         }
         analyzeButton.setEnabled(true);
         clearButton.setEnabled(true);
@@ -342,8 +370,8 @@ public final class MainActivity extends ComponentActivity {
         setBusy(true);
         analysisStatus.setTextColor(COLOR_MUTED);
         analysisStatus.setText(media.kind() == MediaKind.VIDEO
-                ? "Preparing a small set of video frames locally…"
-                : "Running the local image analysis pipeline…");
+                ? "Checking video support. Still-image inference is not available for video yet…"
+                : "Running Viddexa Nano image inference locally…");
 
         try {
             mediaExecutor.execute(() -> {
@@ -358,6 +386,7 @@ public final class MainActivity extends ComponentActivity {
                         setBusy(false);
                         analysisStatus.setText("Analysis could not complete: " + detail + "\nContent remains UNVERIFIED.");
                         analysisStatus.setTextColor(COLOR_WARNING);
+                        applyPolicyActionToPreview(PolicyAction.UNVERIFIED);
                     });
                     return;
                 }
@@ -365,7 +394,9 @@ public final class MainActivity extends ComponentActivity {
                     if (generation != selectionGeneration.get() || isFinishing() || isDestroyed()) return;
                     setBusy(false);
                     analysisStatus.setText(report.message());
-                    analysisStatus.setTextColor(COLOR_WARNING);
+                    analysisStatus.setTextColor(report.action() == PolicyAction.ALLOW
+                            ? COLOR_PRIMARY : COLOR_WARNING);
+                    applyPolicyActionToPreview(report.action());
                 });
             });
         } catch (java.util.concurrent.RejectedExecutionException exception) {
@@ -375,16 +406,159 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
+    /**
+     * This classifier emits whole-image scores, not localization boxes. BLUR therefore
+     * pixelates the full image. Unsupported media (including video in this release) is
+     * kept hidden until the user explicitly chooses Reveal once.
+     */
+    private boolean isFilteringEnabled() {
+        return !settingsStore.buildPolicy().requiredCategories().isEmpty();
+    }
+
+    private void applyPolicyActionToPreview(PolicyAction action) {
+        if (selectedMedia == null) return;
+        clearFilteredPreview();
+        revealButton.setVisibility(View.GONE);
+        emptyPreview.setVisibility(View.GONE);
+
+        if (selectedMedia.kind() == MediaKind.VIDEO) {
+            stopVideoPreview();
+            if (action == PolicyAction.ALLOW) {
+                // The user explicitly disabled all filtering categories. Honour that preference,
+                // while still making clear that this release did not analyse the video.
+                videoPreview.setVisibility(View.VISIBLE);
+                emptyPreview.setVisibility(View.GONE);
+                revealButton.setVisibility(View.GONE);
+                setSelectionStatus("Filtering is disabled in your settings. This video was not analysed.");
+                return;
+            }
+            videoPreview.setVisibility(View.GONE);
+            switch (action) {
+                case WARN:
+                    emptyPreview.setText("Video analysis is not available yet. The video has not been checked. Choose Reveal once to preview it without filtering.");
+                    break;
+                case UNVERIFIED:
+                case BLUR:
+                case HIDE:
+                default:
+                    emptyPreview.setText("Video is UNVERIFIED. This version does not analyse video frames or audio. Playback is hidden until you explicitly choose Reveal once.");
+                    break;
+            }
+            emptyPreview.setVisibility(View.VISIBLE);
+            revealButton.setText("Reveal unfiltered video once");
+            revealButton.setVisibility(View.VISIBLE);
+            setSelectionStatus("Video analysis is not implemented in this release. No claim of safety is made.");
+            return;
+        }
+
+        if (selectedMedia.kind() != MediaKind.IMAGE
+                || imagePreviewBitmap == null || imagePreviewBitmap.isRecycled()) {
+            emptyPreview.setText("This media type is not analysed in this release and remains UNVERIFIED.");
+            emptyPreview.setVisibility(View.VISIBLE);
+            revealButton.setVisibility(View.GONE);
+            setSelectionStatus("Unsupported media remains UNVERIFIED.");
+            return;
+        }
+
+        switch (action) {
+            case BLUR:
+                showPixelatedImage();
+                revealButton.setVisibility(View.VISIBLE);
+                setSelectionStatus("The policy pixelated the entire image. This classifier does not localize individual regions.");
+                break;
+            case HIDE:
+                imagePreview.setVisibility(View.GONE);
+                emptyPreview.setText("Filtered content hidden by your settings.");
+                emptyPreview.setVisibility(View.VISIBLE);
+                revealButton.setText("Reveal once");
+                revealButton.setVisibility(View.VISIBLE);
+                setSelectionStatus("The policy hid this image. You can explicitly reveal it once.");
+                break;
+            case WARN:
+                imagePreview.setImageBitmap(imagePreviewBitmap);
+                imagePreview.setVisibility(View.VISIBLE);
+                setSelectionStatus("The model produced a warning-level signal. Review the analysis details.");
+                break;
+            case ALLOW:
+                imagePreview.setImageBitmap(imagePreviewBitmap);
+                imagePreview.setVisibility(View.VISIBLE);
+                setSelectionStatus("No configured detection threshold was triggered. Category coverage is reported separately.");
+                break;
+            case UNVERIFIED:
+            default:
+                // Balanced default: incomplete category coverage is uncertainty, not a safe result.
+                showPixelatedImage();
+                revealButton.setText("Reveal once");
+                revealButton.setVisibility(View.VISIBLE);
+                setSelectionStatus("Content is UNVERIFIED because this model does not cover every enabled category. The whole image is pixelated until you explicitly reveal it.");
+                break;
+        }
+    }
+
+    private void showPixelatedImage() {
+        if (imagePreviewBitmap == null || imagePreviewBitmap.isRecycled()) return;
+        clearFilteredPreview();
+        int sourceWidth = imagePreviewBitmap.getWidth();
+        int sourceHeight = imagePreviewBitmap.getHeight();
+        float scale = Math.min(1.0f, Math.min(48.0f / sourceWidth, 48.0f / sourceHeight));
+        if (scale >= 1.0f) scale = 0.5f;
+        int smallWidth = Math.max(1, Math.round(sourceWidth * scale));
+        int smallHeight = Math.max(1, Math.round(sourceHeight * scale));
+        filteredPreviewBitmap = Bitmap.createScaledBitmap(
+                imagePreviewBitmap, smallWidth, smallHeight, false);
+        android.graphics.drawable.BitmapDrawable pixelated =
+                new android.graphics.drawable.BitmapDrawable(getResources(), filteredPreviewBitmap);
+        pixelated.setFilterBitmap(false);
+        imagePreview.setImageDrawable(pixelated);
+        imagePreview.setVisibility(View.VISIBLE);
+        emptyPreview.setVisibility(View.GONE);
+    }
+
+    private void revealSelectedMediaOnce() {
+        if (selectedMedia == null) return;
+        clearFilteredPreview();
+        emptyPreview.setVisibility(View.GONE);
+        revealButton.setVisibility(View.GONE);
+        if (selectedMedia.kind() == MediaKind.IMAGE
+                && imagePreviewBitmap != null && !imagePreviewBitmap.isRecycled()) {
+            imagePreview.setImageBitmap(imagePreviewBitmap);
+            imagePreview.setVisibility(View.VISIBLE);
+            setSelectionStatus("You explicitly revealed this image for the current viewing session. Run analysis again to reapply filtering.");
+            return;
+        }
+        if (selectedMedia.kind() == MediaKind.VIDEO) {
+            videoPreview.setVisibility(View.VISIBLE);
+            setSelectionStatus("You explicitly revealed this unfiltered video for the current viewing session. Video analysis is not implemented yet.");
+        }
+    }
+
+    private void clearFilteredPreview() {
+        if (filteredPreviewBitmap == null) return;
+        if (imagePreview != null && imagePreview.getDrawable()
+                instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.drawable.BitmapDrawable drawable =
+                    (android.graphics.drawable.BitmapDrawable) imagePreview.getDrawable();
+            if (drawable.getBitmap() == filteredPreviewBitmap) {
+                imagePreview.setImageDrawable(null);
+            }
+        }
+        if (!filteredPreviewBitmap.isRecycled()) filteredPreviewBitmap.recycle();
+        filteredPreviewBitmap = null;
+    }
+
     private void clearSelection() {
         selectionGeneration.incrementAndGet();
         releaseCurrentSelection();
         stopVideoPreview();
+        clearFilteredPreview();
+        imagePreview.setImageDrawable(null);
         if (imagePreviewBitmap != null && !imagePreviewBitmap.isRecycled()) imagePreviewBitmap.recycle();
         imagePreviewBitmap = null;
-        imagePreview.setImageDrawable(null);
         imagePreview.setVisibility(View.GONE);
         videoPreview.setVisibility(View.GONE);
         emptyPreview.setVisibility(View.VISIBLE);
+        emptyPreview.setText("Your selected media will appear here");
+        revealButton.setVisibility(View.GONE);
         mediaDetails.setText("No media selected");
         analysisStatus.setText("Not analysed. No media is currently selected.");
         analysisStatus.setTextColor(COLOR_MUTED);
@@ -405,6 +579,13 @@ public final class MainActivity extends ComponentActivity {
         }
         selectedMedia = null;
         selectedUriPermissionPersisted = false;
+        clearFilteredPreview();
+        if (imagePreview != null && imagePreview.getDrawable()
+                instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.drawable.BitmapDrawable drawable =
+                    (android.graphics.drawable.BitmapDrawable) imagePreview.getDrawable();
+            if (drawable.getBitmap() == imagePreviewBitmap) imagePreview.setImageDrawable(null);
+        }
         if (imagePreviewBitmap != null && !imagePreviewBitmap.isRecycled()) imagePreviewBitmap.recycle();
         imagePreviewBitmap = null;
     }
@@ -469,7 +650,16 @@ public final class MainActivity extends ComponentActivity {
         selectionGeneration.incrementAndGet();
         if (videoPreview != null) stopVideoPreview();
         if (!isChangingConfigurations()) releaseCurrentSelection();
-        mediaExecutor.shutdownNow();
+        // Release the ONNX session after any active inference on the single worker has finished.
+        if (analysisService != null) {
+            try {
+                mediaExecutor.execute(() -> analysisService.close());
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                // The executor is already stopping; the OS will reclaim this process-local session.
+            }
+        }
+        mediaExecutor.shutdown();
+        clearFilteredPreview();
         if (imagePreviewBitmap != null && !imagePreviewBitmap.isRecycled()) imagePreviewBitmap.recycle();
         super.onDestroy();
     }
@@ -552,9 +742,9 @@ public final class MainActivity extends ComponentActivity {
     private String appVersionName() {
         try {
             android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return info.versionName == null ? "0.2.2-direct-media-picker" : info.versionName;
+            return info.versionName == null ? "0.3.1-local-image-classifier" : info.versionName;
         } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
-            return "0.2.2-direct-media-picker";
+            return "0.3.1-local-image-classifier";
         }
     }
 

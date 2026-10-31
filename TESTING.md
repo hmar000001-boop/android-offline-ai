@@ -1,49 +1,40 @@
-# FilterBridge Lab 0.2.2 — device test plan
+# FilterBridge Lab 0.3.1 test guide
 
-## A. Install
+## Build/CI gate
 
-1. Push the full project to GitHub.
-2. Open **Actions** and wait for the newest **Android CI** run to succeed.
-3. Download `filterbridge-lab-debug-apk-*` from the run's Artifacts section.
-4. Extract the artifact ZIP and install the APK.
-5. Confirm the app subtitle shows `Build 0.2.2-direct-media-picker` (or the exact Gradle version name).
+- CI downloads the pinned Hugging Face revision and exports ONNX.
+- Export script rejects changed labels, wrong dimensions, unexpected image preprocessing, invalid ONNX graphs and PyTorch/ONNX parity error greater than 1e-3.
+- Core tests validate stable softmax, output-to-category mapping, non-finite output rejection and partial coverage behaviour.
+- Android lint runs for `android-ingest`, `ai-runtime-onnx`, and `demo-app`.
 
-## B. Photo import
+## Quick device test (2–5 minutes)
 
-1. Open FilterBridge Lab.
-2. Tap **Choose photo**.
-3. Select a normal JPEG or PNG in Android's system picker.
-4. Confirm the preview appears and the details show `IMAGE`, MIME type, file name, approximate size, and preview dimensions.
-5. Tap **Analyze on device**.
-6. Expected: `STATUS: NOT_ANALYZED`, `POLICY: UNVERIFIED`, and a message that no local classifier is installed.
+1. Install the APK from the latest successful `Android CI` workflow run.
+2. Enable Airplane mode before starting the test.
+3. Open the app and select **Choose photo**.
+4. Select a photo and wait for its preview.
+5. Press **Analyze on device**.
+6. Expected: the five class scores appear; analysis status is `PARTIALLY_ANALYZED`; category coverage is `INCOMPLETE`; the model/revision is identified.
+7. A detection above the current policy's activation confidence can trigger a whole-image pixelation or hide action. An incomplete analysis is also pixelated under the balanced default. This is not region-level blur.
+8. Tap **Reveal once** to restore the original image for this viewing session.
+9. Select a video. Playback is initially hidden. Tap Analyze to see `NOT_ANALYZED` / `UNVERIFIED`, or explicitly tap **Reveal unfiltered video once** to play it without filtering.
 
-Try a large image and a rotated phone photo to exercise downsampling and EXIF orientation. No broad storage permission should be requested.
+If the app says the model asset is missing, the installed APK did not come from a successful CI run that completed the model-export step. A local Gradle build without running the model exporter will deliberately fail closed.
 
-## C. Video import
+## Model quality evaluation
 
-1. Tap **Choose video**.
-2. Select a short MP4 or another supported video.
-3. Confirm video playback controls appear.
-4. Tap play to check that the selected URI is readable.
-5. Tap **Analyze on device**.
-6. Expected: video duration, dimensions when available, and 0–6 extracted frame samples. Samples are discarded after the preflight. The result remains `NOT_ANALYZED` / `UNVERIFIED` because no detector is present.
+Do not validate a content classifier using one or two images. Use a curated, lawful, representative evaluation set with labels separated by:
 
-## D. Settings
+- Explicit nudity / explicit sexual content
+- Suggestive clothing / poses / framing
+- Ordinary skin exposure (sports, beach, medical, non-sexual contexts)
+- Sexualized illustration / non-sexual drawing
+- Safe ordinary images
 
-1. Tap **Filtering settings**.
-2. Change the global level (Off, Warning, Blur, Strict).
-3. Change activation and hide confidence thresholds.
-4. Choose a category and set a category-specific override.
-5. Add a custom category ID, e.g. `smoking`.
-6. Save, close and reopen settings. Confirm values persist.
+Record precision, recall, F1, confusion matrix, false-positive and false-negative examples, per-class thresholds, and performance by image source/quality. Keep a separate hold-out test set. Obtain consent and rights for any media used in model evaluation; do not put sensitive test images in a public repository or CI artifact.
 
-## E. Clear and offline
+The upstream reported evaluation metrics belong to the model publisher and must not be described as FilterBridge accuracy. `sexy` is experimental because the model card contains conflicting descriptions and an explicit-nudity-only intended-use statement.
 
-1. Tap **Clear** and confirm the selected preview disappears.
-2. Enable Airplane mode.
-3. Choose and preview a photo again.
-4. Confirm no network connection is required.
+## Device performance evaluation
 
-## Expected scope
-
-These tests prove direct local file selection, URI access, preview decoding, bounded video preflight (when supported), local settings persistence, and the deterministic policy engine's fail-closed and coverage-aware behaviour. They do **not** prove AI detection or content safety. Do not treat `UNVERIFIED` as safe.
+Record device model, Android version, RAM class, image dimensions, model initialization time, first-inference latency, warmed latency, peak app memory, battery/thermal behaviour and app package size. Repeat with multiple image sizes and image formats. These measurements have not yet been produced by CI.

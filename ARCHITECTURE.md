@@ -1,52 +1,45 @@
-# FilterBridge Lab architecture
+# FilterBridge architecture — 0.3.1
 
-## Dependency direction
+## Boundaries
 
-```text
-demo-app  ───────────────┐
-                         ├──> filter-core (pure Java)
-android-ingest ──────────┘
+- `filter-core` contains platform-neutral contracts and deterministic policy only.
+- `android-ingest` adapts Android Photo Picker/content URIs and local media preview.
+- `ai-runtime-onnx` owns ONNX Runtime, image decoding/preprocessing, model asset verification and the Viddexa Nano adapter.
+- `demo-app` composes the selected runtime with the policy engine and renders actions.
+- `tools/model-export` is build-time tooling; it is not shipped as app code.
 
-Future Android model adapters ──> filter-core contracts
-filter-core must never depend on Android, a platform API, or a model vendor.
-```
+## Model input contract
 
-## Responsibilities
+- One image per request.
+- Decode from the selected `MediaSource` stream; no network access.
+- Apply EXIF orientation where available.
+- Reject invalid or more-than-100-megapixel images; decode downsampled to a maximum edge of 2048 before final model resize.
+- Resize to 224×224 using nearest-neighbour to match the pinned `resample=0` processor setting.
+- Convert RGB, rescale by 1/255, normalize with the mean/std values in the generated manifest.
+- ONNX input: `pixel_values`, float32 `[1,3,224,224]`; output: `logits`, float32 `[1,5]`.
 
-### `filter-core`
+## Evidence and coverage
 
-- Platform-neutral media and analysis contracts.
-- Extensible category identifiers and normalized spatial/time evidence.
-- Explicit analyzer coverage for enabled categories.
-- Deterministic user policy: warning, blur, hide, or unverified.
-- Fail-closed orchestration for analyzer exceptions and null results.
+- `porn` -> NUDITY signal.
+- `hentai` -> SEXUALIZED_ILLUSTRATION signal.
+- `sexy` -> experimental SUGGESTIVE signal.
+- Each Detection records model ID, immutable revision, and raw model label.
+- Analysis marks those categories as partially covered, not fully covered. No score alone certifies full category coverage.
+- A detection may trigger user policy, but the detection does not cause a category to be counted as completely analysed.
+- Other enabled categories remain unverified.
 
-### `android-ingest`
+## Rendering
 
-- Android Photo Picker URI acquisition and validation.
-- Lazy stream access without copying media to app storage.
-- Bounded image preview decoding and EXIF orientation.
-- Bounded video preflight sampling, with safe abstention where scaled extraction is unavailable.
-- Android types are contained in this module.
+Viddexa Nano is a whole-image classifier. It produces no boxes, masks or temporal segments. The demo therefore pixelates the whole image when policy says BLUR or when the balanced default receives an incomplete/UNVERIFIED result, hides it when policy says HIDE, and permits an explicit one-time reveal. Video playback stays hidden until an explicit one-time reveal because video inference is not implemented. A future region detector/segmenter can add spatial evidence without changing model-independent policy contracts.
 
-### `demo-app`
+## Runtime lifecycle
 
-- Minimal local photo/video selection UI.
-- Preview, progress, errors, and local preference controls.
-- Background media work and stale-result cancellation using a selection generation.
-- The current composition deliberately installs `NotConfiguredAnalyzer`; no model is implied.
+- CI-generated ONNX and `.properties` manifest are packed into app assets.
+- On first launch/session, the runtime copies the model to app-private storage through a temporary file, verifies SHA-256, then atomically renames it.
+- Runtime creates one ONNX session per analyzer instance, serializes access to the session and closes it when the activity's service is destroyed.
+- `OrtEnvironment` is a process singleton and is not closed by the analyzer.
+- Missing assets, checksum mismatch, invalid tensor shapes, non-finite logits and runtime errors are FAILED/UNVERIFIED.
 
-## Security and correctness invariants
+## Offline assurance
 
-1. No network permission or remote inference in this demo.
-2. No broad media-library permission; the user selects each asset.
-3. No media bytes are copied to persistent app storage by the picker adapter.
-4. Missing, failed, or incomplete analysis is `UNVERIFIED`, never `ALLOW`.
-5. One specialist model cannot claim coverage of categories it did not analyse.
-6. A positive detection can still trigger the user's selected action even if other categories remain unverified.
-7. Model observations never make religious or normative decisions; the deterministic policy uses the user's configuration.
-8. Confidence thresholds are provisional until validated per model and category.
-
-## Boundaries of this release
-
-This is a hardened engineering foundation, not a production content-protection product. There are no actual classification weights, OCR/ASR/music models, or blur/hide renderers in this release. The first model must be chosen and evaluated before those behaviours can be truthfully implemented. Video currently has local preview and bounded preflight sampling only; it does not provide frame-by-frame protection.
+The demo app manifest has no `INTERNET` permission. The GitHub build machine fetches the pinned model; the installed phone uses the packaged ONNX file only. The export step validates the source model and ONNX graph before APK assembly.

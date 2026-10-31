@@ -1,19 +1,10 @@
-FilterBridge Lab 0.2.2 source verification
-========================================
+FilterBridge Lab 0.3.1-local-image-classifier
 
-Verified in the project-generation environment:
-- Pure Java filter-core sources compile with Java 17 using -Xlint:all -Werror.
-- All 16 core policy test methods compiled and passed in an isolated Java 17 harness with JUnit-compatible assertions. The Gradle/JUnit task itself was not run locally.
-- Core tests cover ALLOW, WARN/BLUR/HIDE thresholds, UNVERIFIED, runtime failure, null analyzer output, normalized regions, and incomplete category coverage.
-- Android manifest XML parses and declares no INTERNET, READ_MEDIA_IMAGES, READ_MEDIA_VIDEO, or legacy external-storage permission.
-- GitHub Actions workflow YAML parses.
-- Source archive integrity is checked after packaging.
-- App/version metadata is consistently 0.2.2-direct-media-picker.
-
-Not verified in this environment:
-- Full Android Gradle build / Android Lint / APK assembly (Android SDK and Gradle are not installed here).
-- Device-level Photo Picker fallback, cloud-provider, image-decoder, video-player, lifecycle, and thermal tests.
-- Actual AI classification: no model weights or classifier adapter are included.
-- Automatic blur/hide rendering and real-time video filtering are not implemented.
-
-The first successful GitHub Actions run is the authoritative Android build result. A passing CI build does not replace device testing or model-quality evaluation.
+Source status: first local still-image classifier integration is implemented in this archive.
+Pure Java core compilation: passed with Java 17.
+Core test methods: 21 passed using a temporary JUnit-compatible local harness; GitHub Actions will run the official JUnit 4.13.2 Gradle test task.
+Model exporter Python syntax: passed.
+Model download/export and PyTorch-to-ONNX parity: not run locally; GitHub Actions performs this step on the pinned revision.
+Android Gradle build/lint: not run in this environment (Android SDK/Gradle unavailable).
+APK status: not generated here. GitHub Actions must pass model export, unit tests, Android lint and assembleDebug before an APK is produced.
+Android image decode/resize preprocessing parity against the pinned Hugging Face PIL processor: not yet measured on a physical device; CI verifies PyTorch-to-ONNX graph parity on preprocessed tensors.

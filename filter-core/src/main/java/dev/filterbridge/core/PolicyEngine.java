@@ -18,8 +18,10 @@ public final class PolicyEngine {
                     "All filtering categories are disabled by the user's policy.", true);
         }
 
+        // A positive observation can trigger a policy action, but must not certify that
+        // the category was exhaustively checked. Only the analyzer's explicit coverage
+        // declaration may make the overall result complete.
         Set<CategoryId> covered = new HashSet<>(analysis.coveredCategories());
-        for (Detection detection : analysis.detections()) covered.add(detection.category());
         boolean complete = analysis.status() == AnalysisStatus.ANALYZED
                 && covered.containsAll(policy.requiredCategories());
 

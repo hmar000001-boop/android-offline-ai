@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "filterbridge-lab"
-include(":filter-core", ":android-ingest", ":demo-app")
+include(":filter-core", ":android-ingest", ":ai-runtime-onnx", ":demo-app")

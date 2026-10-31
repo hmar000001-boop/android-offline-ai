@@ -12,15 +12,42 @@ concurrency:
   group: android-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  HF_HUB_DISABLE_TELEMETRY: '1'
+  HF_HUB_DISABLE_PROGRESS_BARS: '1'
+  HF_HUB_DISABLE_IMPLICIT_TOKEN: '1'
+
 jobs:
   build-debug-apk:
-    name: Test and build debug APK
+    name: Export offline model, test and build debug APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+
+      - name: Set up Python 3.11 for pinned model export
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/model-export/requirements.txt
+
+      - name: Install CPU-only PyTorch exporter
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.8.0"
+          python -m pip install -r tools/model-export/requirements.txt
+
+      - name: Download pinned model, export ONNX and verify parity
+        run: |
+          python tools/model-export/export_viddexa_nano.py | tee model-export.log
+          cp build/viddexa-export/export-summary.json model-export-summary.json
+          test -s ai-runtime-onnx/src/main/assets/models/viddexa-nano.onnx
+          test -s ai-runtime-onnx/src/main/assets/models/model.properties
+          test -s ai-runtime-onnx/src/main/assets/models/VIDDEXA-MODEL-CARD.md
+          python -m json.tool model-export-summary.json > /dev/null
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -46,14 +73,17 @@ jobs:
       - name: Show build tool versions
         run: |
           java --version
+          python --version
           gradle --version
           sdkmanager --list_installed
 
-      - name: Run unit tests and build debug APK
+      - name: Run unit tests, Android lint and build debug APK
         run: >-
           gradle --no-daemon --stacktrace --console=plain
           clean
           :filter-core:test
+          :android-ingest:lintDebug
+          :ai-runtime-onnx:lintDebug
           :demo-app:lintDebug
           :demo-app:assembleDebug
 
@@ -62,13 +92,18 @@ jobs:
         run: |
           mkdir -p build-artifacts
           {
-            echo "version=0.2.2-direct-media-picker"
+            echo "version=0.3.1-local-image-classifier"
             echo "commit=${GITHUB_SHA}"
             echo "run=${GITHUB_RUN_NUMBER}"
             echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "model=viddexa/nsfw-detection-2-nano"
+            echo "model_revision=12e57200346246b37382f746e4d94d10b014f6a1"
+            echo "onnx_sha256=$(grep '^onnxSha256=' ai-runtime-onnx/src/main/assets/models/model.properties | cut -d= -f2-)"
+            echo "source_weights_sha256=$(grep '^sourceWeightsSha256=' ai-runtime-onnx/src/main/assets/models/model.properties | cut -d= -f2-)"
           } > build-artifacts/build-info.txt
+          cp ai-runtime-onnx/src/main/assets/models/model.properties build-artifacts/
 
-      - name: Upload debug APK
+      - name: Upload debug APK and model manifest
         if: success()
         uses: actions/upload-artifact@v7
         with:
@@ -76,16 +111,22 @@ jobs:
           path: |
             demo-app/build/outputs/apk/debug/*.apk
             build-artifacts/build-info.txt
+            build-artifacts/model.properties
+            model-export-summary.json
+            model-export.log
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload unit test reports
+      - name: Upload build, export and unit-test reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: filterbridge-test-reports-${{ github.run_number }}
+          name: filterbridge-build-reports-${{ github.run_number }}
           path: |
             filter-core/build/reports/tests/test/
             filter-core/build/test-results/test/
+            **/build/reports/lint-results-*.html
+            model-export-summary.json
+            model-export.log
           if-no-files-found: ignore
           retention-days: 14

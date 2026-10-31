@@ -33,4 +33,15 @@ public final class FilteringEngine {
         }
         return new FilteringOutcome(analysis, policyEngine.decide(analysis, policy));
     }
+    /** Releases analyzer resources when the analyzer implements AutoCloseable. */
+    public void close() {
+        if (analyzer instanceof AutoCloseable) {
+            try {
+                ((AutoCloseable) analyzer).close();
+            } catch (Exception ignored) {
+                // Shutdown is best-effort; inference failures are handled during analyze().
+            }
+        }
+    }
+
 }

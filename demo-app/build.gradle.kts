@@ -10,8 +10,8 @@ android {
         applicationId = "dev.filterbridge.demo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.2.2-direct-media-picker"
+        versionCode = 7
+        versionName = "0.3.1-local-image-classifier"
     }
 
     compileOptions {
@@ -23,5 +23,6 @@ android {
 dependencies {
     implementation(project(":filter-core"))
     implementation(project(":android-ingest"))
+    implementation(project(":ai-runtime-onnx"))
     implementation("androidx.activity:activity:1.13.0")
 }

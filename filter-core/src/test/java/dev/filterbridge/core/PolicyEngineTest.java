@@ -55,6 +55,25 @@ public class PolicyEngineTest {
     }
 
     @Test
+    public void positiveDetectionDoesNotAutomaticallyCertifyCategoryCoverage() {
+        AnalysisResult partial = new AnalysisResult(AnalysisStatus.PARTIALLY_ANALYZED,
+                Collections.singletonList(new Detection(CategoryId.NUDITY, 0.72,
+                        EvidenceType.IMAGE, -1, -1)), Collections.emptySet(),
+                Collections.singleton(CategoryId.NUDITY), "Experimental classifier ran.");
+        PolicyDecision decision = engine.decide(partial, balanced);
+        assertEquals(PolicyAction.BLUR, decision.action());
+        org.junit.Assert.assertFalse(decision.analysisComplete());
+    }
+
+    @Test
+    public void partialAndFullCoverageCannotOverlap() {
+        assertThrows(IllegalArgumentException.class, () -> new AnalysisResult(
+                AnalysisStatus.PARTIALLY_ANALYZED, Collections.emptyList(),
+                Collections.singleton(CategoryId.NUDITY),
+                Collections.singleton(CategoryId.NUDITY), "invalid"));
+    }
+
+    @Test
     public void categoryOverrideCanDisableOneCategory() {
         FilteringPolicy custom = FilteringPolicy.builder(CategoryRule.balancedDefault())
                 .override(CategoryId.MUSIC, new CategoryRule(FilterLevel.NONE, 0.0, 1.0))

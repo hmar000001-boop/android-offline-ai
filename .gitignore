@@ -4,3 +4,7 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+ai-runtime-onnx/src/main/assets/models/viddexa-nano.onnx
+ai-runtime-onnx/src/main/assets/models/model.properties
+ai-runtime-onnx/src/main/assets/models/VIDDEXA-MODEL-CARD.md
+build/

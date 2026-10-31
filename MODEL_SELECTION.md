@@ -1,76 +1,56 @@
-# Model integration decision — FilterBridge Lab 0.2.2
+# Model selection and integration status — 0.3.1
 
-## Current state
+## Integrated experimental model
 
-No image, video, audio, speech, OCR, or text-classification weights are bundled. The application deliberately reports `NOT_ANALYZED` / `UNVERIFIED` until a real local model adapter is installed. This is safer than presenting an untested generic classifier as a complete safety system.
+### Viddexa NSFW Detection 2 Nano
 
-## Candidate: Desert Ant Labs Moderator (nudity only)
+- Source: `viddexa/nsfw-detection-2-nano`
+- Pinned revision: `12e57200346246b37382f746e4d94d10b014f6a1`
+- Model-card metadata: Apache-2.0
+- Architecture: fine-tuned EfficientNet-B0 image classifier
+- Input: 224×224 RGB, direct resize, NCHW tensor, `image_mean=[0.485,0.456,0.406]`, `image_std=[0.47853944,0.4732864,0.47434163]`, rescale 1/255
+- Labels: `safe`, `hentai`, `porn`, `sexy`, `drawing`
+- Runtime: ONNX Runtime Android 1.31.1, CPU provider
+- Publisher-reported metrics: macro F1 93.00%; per-class F1 values appear in the upstream model card. These values have not been independently reproduced by FilterBridge and must not be treated as target-device accuracy.
 
-The vendor currently documents an Android SDK (`ai.desertant:moderator:4.0.0` in its SDK guide; its model repository page has since been updated to 4.2.1), an approximately 9.2 MB int8 TFLite model, and five visual outputs related to exposed nipples, genitals, buttocks, nudity, and sexual activity. It supports image and video-frame scoring, not the rest of FilterBridge's category list. The vendor describes its reported recall/specificity as an internal evaluation on a proprietary held-out set, not a published independent benchmark.
+#### Model-card limitation
 
-**Privacy/licensing issue:** the vendor's Source-Available License v1.1 (effective 2026-10-30) requires a background license activation. It sends a random install ID, app identifier, model/version, SDK/platform details, and possibly an API key; the license check has no opt-out. It says inputs, outputs, and user content are not sent. Below 100,000 monthly licenses per platform/model the stated tier is free; above that a commercial license is required. Air-gapped use requires contacting the vendor for a signed offline license. It also requires discoverable attribution.
+The class descriptions define `sexy` as images without explicit nudity that may show suggestive nudity or risqué clothing. However, the intended-use section states that the model is designed to detect explicit nudity and that suggestive nudity or risqué clothing without explicit nudity may be labelled safe. This contradiction prevents us from approving the `sexy` output as a reliable suggestive detector.
 
-This may be technically suitable as an optional nudity adapter, but it is **not included** because its mandatory licensing metadata check conflicts with a strict no-metadata/offline-only deployment unless the vendor provides an acceptable offline license. It must not become a hidden default. Re-evaluate the exact pinned SDK version and license before adopting it.
+The adapter exposes `sexy` as an experimental signal. It marks NUDITY, SUGGESTIVE, and SEXUALIZED_ILLUSTRATION as partially covered, not fully covered. Other categories are not covered. A model score is not a calibrated probability until we calibrate it on our own representative dataset.
 
-## Candidate: GantMan nsfw_model / OpenNSFW2
+The classifier is global to the whole image; it returns no bounding boxes. BLUR therefore pixelates the entire image preview, not a specific body region. HIDE removes the preview. The user can explicitly reveal the image once. No video frames are classified in this release.
 
-GantMan's model page describes five image labels (`drawings`, `hentai`, `neutral`, `porn`, `sexy`) and publishes the inference implementation and model artifacts. A current repository issue asks whether the released weights themselves are covered by the repository's MIT license. The implementation license therefore must not be assumed to settle the model-weight license. OpenNSFW2 is documented as a Keras/Python implementation focused on pornographic imagery; it is not a ready-to-use Android Java runtime package. These are not bundled.
+## Evaluated but not integrated
 
-## Recommended runtime architecture
+### Viddexa NSFW Detection 2 Mini
 
-1. Keep `ContentAnalyzer` and the normalized `Detection` contract in `filter-core`.
-2. Add a separate Android runtime adapter for each specialist model. Keep all vendor classes out of `filter-core`.
-3. Record the model ID, version, license, taxonomy, calibration dataset, and preprocessing contract in a model manifest.
-4. A detector must return category, calibrated score or explicitly uncalibrated rank, evidence type, optional normalized region, and optional video time range. Do not treat raw model scores as probabilities without calibration evidence.
-5. A failed/unavailable model must return `FAILED` or `NOT_ANALYZED`; the policy layer maps incomplete analysis to `UNVERIFIED`.
-6. Before enabling a detector for users, run a representative evaluation set and publish per-category precision/recall, confusion matrix, latency, memory, and thermal measurements.
+EfficientNet-B4 with 17M parameters and a larger model file. Its publisher reports higher F1 than Nano, including on the `sexy` class, but the same intended-use contradiction applies. It remains a device-performance and quality comparison candidate, not the default runtime.
 
-## Why the first runtime is not wired in this release
+### Freepik NSFW Image Detector
 
-Google ML Kit supports custom image-labeling models bundled inside the APK, allowing inference without downloading the model at runtime. However, the developer must supply a compatible trained model. ML Kit's generic labeler is not itself a model for nudity, suggestive content, alcohol, violence, flirting, or music. The project therefore keeps a model-neutral boundary until a legally distributable model with suitable labels and evaluation data is selected.
+EVA-based classifier with `neutral`, `low`, `medium`, `high` outputs, MIT model-card metadata, and a 173 MB published weight file. It is heavier than Nano and uses synthetic labels according to its model card. Keep as a high-resource comparison candidate; it is not packaged in this release.
 
-## Scope that still requires specialist models
+### NudeNet
 
-| Category | Required perception capability |
-|---|---|
-| Nudity / exposed body regions | Image/frame classifier or detector with spatial boxes |
-| Suggestive content / poses | Context-aware image classifier; requires explicit label policy and evaluation |
-| Sexualized illustrations | Dedicated image/illustration classifier |
-| Violence / disturbing imagery | Image/frame classifier and potentially temporal video model |
-| Alcohol / drugs / gambling | Object/logo/context detection; separate category heads may be needed |
-| Music | Audio event / music classifier; not merely speech recognition |
-| Profanity | Speech recognition or text extraction plus multilingual language classifier |
-| Flirting / sexualized interactions | Text + dialogue/context classifier; high ambiguity and language dependence |
-| User-defined categories | Requires a compatible classifier, user-authored rule, or a future model-training path; adding an ID alone does not create detection capability |
+Not integrated. The upstream project and third-party mirrors have conflicting licence/provenance signals, including AGPL-labelled upstream materials and mirrors whose weight provenance is not independently demonstrated. Do not bundle any NudeNet weights until exact model-weight origin, licence and distribution rights are cleared.
 
-The perception system must make observations only. User-configured deterministic policy decides whether to warn, blur, or hide.
+### Blue-Eye
 
+Not integrated. Its DINOv3 ViT-L/16 weight is roughly 1.21 GB and carries model-specific licence conditions; it is not appropriate for the current 4–6 GB phone target.
 
-## Release gate — why the model integration remains intentionally disabled
+## Other categories — future candidate directions
 
-The current application build has a real media picker, local preview/decode path, filtering preferences, and a fail-closed policy engine. It does **not** yet have a content-classification engine. We are not bundling an arbitrary NSFW or object-detection model merely to make the Analyze button appear functional.
+- Violence: dedicated image/action classifiers, not just object labels.
+- Alcohol/drugs/gambling: category-specific object detection plus contextual classification.
+- Music: YAMNet as a baseline audio-event classifier, followed by domain-specific validation/fine-tuning.
+- Profanity: offline ASR (sherpa-onnx candidate), language identification, OCR, transcript normalization and multilingual text classification.
+- Flirting/sexualized interactions: contextual classifier over legitimately available text/transcripts; not keyword matching alone.
+- Sexualized illustrations: separate illustration-focused evaluation, not assumed solved by `hentai` alone.
+- Custom categories: simple rules, semantic embeddings, or user-labelled classifier adaptation depending on the category.
 
-A single nudity model would not cover music, profanity, violence, substances, flirting, sexualized illustrations, or custom user categories. It also would not automatically provide spatial regions or calibrated scores. The policy engine now requires explicit category coverage, so a single-category result cannot be presented as a fully verified result.
+All candidate models and weights require individual licence/provenance review and target-device benchmarking. `filter-core` remains model-independent; each detector will be a replaceable specialist module.
 
-Before integration, each candidate must pass all of these gates:
+## Android preprocessing validation
 
-- **License:** explicit permission for commercial distribution of both runtime and model weights; no assumptions that the source-code license also covers weights or training data.
-- **Offline operation:** no required license activation, telemetry, remote inference, or unannounced model download.
-- **Taxonomy fit:** documented outputs for the intended category, with a clear distinction between whole-image classification and spatial object detection.
-- **Evaluation:** an independently reviewable test set relevant to our intended content, with per-category precision/recall and false-negative analysis.
-- **Mobile engineering:** an Android-supported runtime, quantized model, memory and latency benchmarks, and thermal/battery measurements on the target phone range.
-- **Calibration:** scores must not be treated as probabilities unless calibration has been measured.
-
-Current leads such as Desert Ant Labs Moderator and public NSFW image classifiers are limited to particular visual categories and have license, offline-use, evaluation, runtime, or region-localization questions. They are candidates for controlled evaluation, not approved production dependencies. A model for one category can be integrated as one specialist adapter, but the user interface must continue to show incomplete coverage for every other enabled category.
-
-## Implementation sequence
-
-1. Select and validate one offline visual specialist model for explicit nudity.
-2. Add a dedicated `android-runtime-*` module; keep runtime-specific code out of `filter-core`.
-3. Return observations with model/version metadata, category coverage, calibrated score, evidence type, and an optional normalized bounding box.
-4. Add deterministic image-region blur and whole-item hide rendering, driven only by `PolicyDecision`.
-5. Build an evaluation harness and report model quality separately from policy-engine correctness.
-6. Add separate detectors for suggestive content, sexualized illustrations, violence, substances/gambling, speech/profanity, and music.
-7. Only then begin timeline-aware, sampled video inference and real-time performance work.
-
-Until those gates are met, `NOT_ANALYZED` / `UNVERIFIED` is the correct result.
+Android Bitmap resize/colour-conversion parity against the upstream PIL image processor has not yet been measured on a physical device; this must be checked before production use.

@@ -10,16 +10,26 @@ public final class Detection {
     private final long startTimeMs;
     private final long endTimeMs;
     private final NormalizedBox region;
+    private final String modelId;
+    private final String modelVersion;
+    private final String modelLabel;
 
-    /** Creates a detection without a spatial region (for whole-image or non-visual evidence). */
+    /** Creates a detection without a spatial region or model metadata. */
     public Detection(CategoryId category, double confidence, EvidenceType evidenceType,
                      long startTimeMs, long endTimeMs) {
-        this(category, confidence, evidenceType, startTimeMs, endTimeMs, null);
+        this(category, confidence, evidenceType, startTimeMs, endTimeMs, null, null, null, null);
     }
 
     /** Creates a detection with an optional normalized image/video-frame region. */
     public Detection(CategoryId category, double confidence, EvidenceType evidenceType,
                      long startTimeMs, long endTimeMs, NormalizedBox region) {
+        this(category, confidence, evidenceType, startTimeMs, endTimeMs, region, null, null, null);
+    }
+
+    /** Creates a detection carrying provenance for auditability and model replacement. */
+    public Detection(CategoryId category, double confidence, EvidenceType evidenceType,
+                     long startTimeMs, long endTimeMs, NormalizedBox region,
+                     String modelId, String modelVersion, String modelLabel) {
         this.category = Objects.requireNonNull(category, "category");
         this.evidenceType = Objects.requireNonNull(evidenceType, "evidenceType");
         if (Double.isNaN(confidence) || Double.isInfinite(confidence)
@@ -34,6 +44,9 @@ public final class Detection {
         this.startTimeMs = startTimeMs;
         this.endTimeMs = endTimeMs;
         this.region = region;
+        this.modelId = normalizeOptional(modelId);
+        this.modelVersion = normalizeOptional(modelVersion);
+        this.modelLabel = normalizeOptional(modelLabel);
     }
 
     public CategoryId category() { return category; }
@@ -45,4 +58,14 @@ public final class Detection {
     public long endTimeMs() { return endTimeMs; }
     /** Returns null when the model classified the whole asset rather than a sub-region. */
     public NormalizedBox region() { return region; }
+    /** Returns null for detections from legacy or unbranded analyzers. */
+    public String modelId() { return modelId; }
+    public String modelVersion() { return modelVersion; }
+    public String modelLabel() { return modelLabel; }
+
+    private static String normalizeOptional(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
 }
