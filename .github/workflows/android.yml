@@ -28,14 +28,15 @@ jobs:
           java-version: '21'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          packages: platform-tools
 
       - name: Install Android SDK platform and build tools
         run: |
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-          set +o pipefail
-          yes | sdkmanager --licenses >/dev/null
-          set -o pipefail
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up pinned Gradle
         uses: gradle/actions/setup-gradle@v4
