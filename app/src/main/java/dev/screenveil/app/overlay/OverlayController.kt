@@ -3,6 +3,7 @@ package dev.screenveil.app.overlay
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -12,7 +13,11 @@ import dev.screenveil.app.policy.ModerationPolicy
 import dev.screenveil.app.policy.ModerationSettings
 
 /** CPU-heavy crop processing happens on a worker; window attachment/update is main-thread only. */
-class OverlayController(private val context: Context) {
+class OverlayController(
+    private val context: Context,
+    private val windowType: Int = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+    private val requiresDrawOverlaysPermission: Boolean = false
+) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val displayedWindows = mutableListOf<DisplayedWindow>()
 
@@ -24,7 +29,12 @@ class OverlayController(private val context: Context) {
         var layoutParams: WindowManager.LayoutParams
     )
 
-    fun prepare(frame: Bitmap, regions: List<DetectedMediaRegion>, settings: ModerationSettings): List<PreparedMask> {
+    fun prepare(
+        frame: Bitmap,
+        regions: List<DetectedMediaRegion>,
+        settings: ModerationSettings,
+        screenBounds: Rect = Rect(0, 0, frame.width, frame.height)
+    ): List<PreparedMask> {
         val masks = ArrayList<PreparedMask>()
         for (region in regions) {
             if (!ModerationPolicy.shouldRedact(region.decision, settings.redactUncertain)) continue
@@ -40,7 +50,21 @@ class OverlayController(private val context: Context) {
                 continue
             }
             if (!crop.isRecycled && redacted !== crop) crop.recycle()
-            masks += PreparedMask(left, top, right - left, bottom - top, redacted)
+
+            // takeScreenshotOfWindow returns only the app window. Convert screenshot-local
+            // coordinates into absolute display pixels using AccessibilityWindowInfo bounds.
+            val overlayLeft = screenBounds.left + (left.toFloat() / frame.width * screenBounds.width()).toInt()
+            val overlayTop = screenBounds.top + (top.toFloat() / frame.height * screenBounds.height()).toInt()
+            val overlayRight = screenBounds.left + (right.toFloat() / frame.width * screenBounds.width()).toInt()
+            val overlayBottom = screenBounds.top + (bottom.toFloat() / frame.height * screenBounds.height()).toInt()
+            val overlayWidth = (overlayRight - overlayLeft).coerceAtLeast(1)
+            val overlayHeight = (overlayBottom - overlayTop).coerceAtLeast(1)
+            val displayBitmap = if (redacted.width != overlayWidth || redacted.height != overlayHeight) {
+                Bitmap.createScaledBitmap(redacted, overlayWidth, overlayHeight, true).also {
+                    if (it !== redacted) recycle(redacted)
+                }
+            } else redacted
+            masks += PreparedMask(overlayLeft, overlayTop, overlayWidth, overlayHeight, displayBitmap)
         }
         return masks
     }
@@ -56,7 +80,7 @@ class OverlayController(private val context: Context) {
             clear()
             return true
         }
-        if (!hasOverlayPermission()) {
+        if (requiresDrawOverlaysPermission && !hasOverlayPermission()) {
             masks.forEach { recycle(it.bitmap) }
             return false
         }
@@ -103,12 +127,13 @@ class OverlayController(private val context: Context) {
         }
     }
 
-    fun hasOverlayPermission(): Boolean = android.provider.Settings.canDrawOverlays(context)
+    fun hasOverlayPermission(): Boolean = !requiresDrawOverlaysPermission ||
+        android.provider.Settings.canDrawOverlays(context)
 
     private fun createLayoutParams(mask: PreparedMask) = WindowManager.LayoutParams(
         mask.width.coerceAtLeast(1),
         mask.height.coerceAtLeast(1),
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        windowType,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or

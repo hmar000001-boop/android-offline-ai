@@ -1,22 +1,37 @@
-# Security policy
+# Security and privacy notes
 
-ScreenVeil handles sensitive screen pixels. Please do not open public issues containing screenshots, personal content, model files, tokens, or private device information.
+ScreenVeil is experimental software that processes sensitive on-screen pixels. Treat it as a privileged application and review the source before enabling its Accessibility Service.
 
-## Reporting
+## Capture permissions and behavior
 
-Report security issues privately to the repository maintainer before public disclosure. Include affected version, Android version, reproduction steps and logs with private screen data removed.
+- ScreenVeil does not use `MediaProjection`, a screen-recording consent dialog, a foreground capture service, or `SYSTEM_ALERT_WINDOW`.
+- The user must manually enable ScreenVeil under Android Settings → Accessibility. The application cannot grant itself this capability.
+- Android binds the service through `android.permission.BIND_ACCESSIBILITY_SERVICE`.
+- The service declares `canTakeScreenshot=true` and `canRetrieveWindowContent=true`. The latter is needed to retrieve active application-window IDs and their screen bounds for `takeScreenshotOfWindow()`.
+- The implementation reads event type/package metadata, active window IDs and window bounds. It does not call `rootInActiveWindow`, inspect `AccessibilityNodeInfo`, read text/content descriptions, click UI elements or perform gestures.
+- Screenshots are requested from the active application window, not the entire display. The Android API specifically supports excluding accessibility overlays from the captured window. System surfaces outside the target window are not analyzed.
+- Android may reject screenshots of secure/protected windows or rate-limit capture requests. ScreenVeil does not bypass `FLAG_SECURE`, DRM or platform restrictions.
 
-## Security design
+## Local data
 
-- Screen pixels stay on-device and are never uploaded.
-- Temporary model input images are written only to private app cache and deleted after inference.
-- The model is stored in private app files and must pass a pinned SHA-256 check.
-- The model downloader uses HTTPS and a fixed upstream repository URL.
-- The capture service is not exported and requires explicit MediaProjection authorization.
-- Overlay permission is requested through Android system settings.
-- No Accessibility Service, boot receiver, ad SDK, analytics SDK, account system or remote command interface is included.
-- CI uses read-only repository permissions and does not require secrets.
+- Screen frames are held in process memory and copied into a private app-cache JPEG only for LiteRT-LM image input. The JPEG is deleted in a `finally` block after inference.
+- On application startup, stale `screenveil-frame-*` / legacy `screen-frame-*` cache files are removed.
+- The model is stored under private `filesDir` storage. It is downloaded only after the user presses the download button, from a pinned repository commit, and is checked against a pinned SHA-256 before loading.
+- No screenshot, model prompt, model output, package list, event stream or usage analytics is uploaded.
+- `INTERNET` is needed only for the explicit model download. The runtime path performs local inference.
+- Android backup is disabled (`allowBackup=false`).
 
-## Important limitation
+## Model trust
 
-ScreenVeil is experimental and is not a security boundary. It cannot protect content that Android does not expose to MediaProjection, and its AI model can miss or misclassify material. Do not rely on it as the sole child-safety, workplace-safety or other high-assurance control.
+A SHA-256 hash verifies integrity against a known expected digest; it does not independently prove the publisher's identity or the model's semantic safety. ScreenVeil therefore ships with one hard-coded, source-reviewed catalogue entry. Arbitrary model import is not enabled. Additional models must be reviewed for source provenance, exact immutable artifact, license, runtime compatibility and evaluation results before being added.
+
+## Security limitations
+
+- ScreenVeil is not a security boundary and can miss or misclassify content.
+- Gemma 4 E2B is not a specialist moderation classifier. Its boxes are generated estimates.
+- The app does not guarantee a redaction before the first visible frame.
+- Protected windows, system surfaces, DRM-backed media and some vendor application windows may not be capturable.
+- Accessibility service availability and screenshot limits depend on Android/device behavior.
+- Model inference can consume significant RAM, CPU/GPU time, battery and thermal headroom.
+
+Do not rely on ScreenVeil as the sole child-safety, workplace-safety, legal-compliance or other high-assurance control.

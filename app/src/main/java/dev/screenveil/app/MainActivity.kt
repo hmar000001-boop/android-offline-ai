@@ -1,18 +1,11 @@
 package dev.screenveil.app
 
-import android.Manifest
-import android.app.Activity
 import android.content.Intent
-import android.media.projection.MediaProjectionManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -56,49 +49,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import dev.screenveil.app.capture.ProtectionStatus
-import dev.screenveil.app.capture.ScreenProtectionService
+import dev.screenveil.app.capture.ScreenProtectionAccessibilityService
 import dev.screenveil.app.model.GemmaModelCatalog
 import dev.screenveil.app.model.ModelInstaller
-import dev.screenveil.app.policy.ModerationSettings
 import dev.screenveil.app.policy.RedactionEffect
 import kotlinx.coroutines.launch
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private lateinit var captureLauncher: ActivityResultLauncher<Intent>
-    private lateinit var overlaySettingsLauncher: ActivityResultLauncher<Intent>
-    private lateinit var notificationLauncher: ActivityResultLauncher<String>
-    private var startPending = false
+    private var accessibilityEnabled by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        cacheDir.listFiles()?.filter { it.isFile && it.name.startsWith("screen-frame-") }?.forEach { it.delete() }
-        captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val data = result.data
-            if (result.resultCode == Activity.RESULT_OK && data != null) {
-                try {
-                    ContextCompat.startForegroundService(
-                        this,
-                        ScreenProtectionService.startIntent(this, result.resultCode, data)
-                    )
-                } catch (error: Exception) {
-                    Toast.makeText(this, "Could not start protection: ${error.message}", Toast.LENGTH_LONG).show()
-                }
-            } else {
-                Toast.makeText(this, "Screen capture was not authorized. Protection remains off.", Toast.LENGTH_LONG).show()
-            }
-        }
-        overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (Settings.canDrawOverlays(this)) continueStartFlow()
-            else Toast.makeText(this, "Overlay permission is required to display redaction masks.", Toast.LENGTH_LONG).show()
-        }
-        notificationLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // Android permits a mediaProjection foreground service without POST_NOTIFICATIONS,
-            // but granting it makes the persistent stop control easier to access.
-            launchCaptureConsent()
-        }
+        removeAbandonedFrameFiles()
+        accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
 
         setContent {
             val colors = lightColorScheme(
@@ -109,52 +74,82 @@ class MainActivity : ComponentActivity() {
             )
             MaterialTheme(colorScheme = colors) {
                 ScreenVeilHome(
+                    accessibilityEnabled = accessibilityEnabled,
                     onStart = { beginProtection() },
-                    onStop = { stopProtection() }
+                    onStop = { stopProtection() },
+                    onOpenAccessibilitySettings = { openAccessibilitySettings() }
                 )
             }
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
+        if (accessibilityEnabled && AppPreferences(this).isProtectionEnabled()) {
+            // The service also starts itself from onServiceConnected. This covers the case where
+            // the user returns from Settings after enabling ScreenVeil.
+            ScreenProtectionAccessibilityService.requestStart()
+        }
+    }
+
     private fun beginProtection() {
         if (!ModelInstaller.isVerifiedInstalled(this)) {
-            Toast.makeText(this, "Install and verify Gemma 4 before starting protection.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Download and verify Gemma 4 before starting protection.", Toast.LENGTH_LONG).show()
             return
         }
-        startPending = true
-        continueStartFlow()
-    }
 
-    private fun continueStartFlow() {
-        if (!startPending) return
-        if (!Settings.canDrawOverlays(this)) {
-            overlaySettingsLauncher.launch(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
+        AppPreferences(this).setProtectionEnabled(true)
+        accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
+        if (!accessibilityEnabled) {
+            openAccessibilitySettings()
+            Toast.makeText(
+                this,
+                "Enable ScreenVeil under Installed apps in Accessibility settings. Protection starts automatically after it is enabled.",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            return
-        }
-        launchCaptureConsent()
-    }
 
-    private fun launchCaptureConsent() {
-        startPending = false
-        val manager = getSystemService(MediaProjectionManager::class.java)
-        captureLauncher.launch(manager.createScreenCaptureIntent())
+        if (!ScreenProtectionAccessibilityService.requestStart()) {
+            Toast.makeText(this, "Android is reconnecting the accessibility service. Return to ScreenVeil in a moment.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun stopProtection() {
-        runCatching { startService(ScreenProtectionService.stopIntent(this)) }
+        AppPreferences(this).setProtectionEnabled(false)
+        ScreenProtectionAccessibilityService.requestStop()
+        ProtectionStatus.update(
+            ProtectionStatus.State(
+                active = false,
+                modelReady = ModelInstaller.isVerifiedInstalled(this),
+                message = "Protection paused · Accessibility remains enabled"
+            )
+        )
+    }
+
+    private fun openAccessibilitySettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.onFailure {
+            Toast.makeText(this, "Could not open Android Accessibility settings: ${it.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun removeAbandonedFrameFiles() {
+        cacheDir.listFiles()
+            ?.filter { it.isFile && (it.name.startsWith("screen-frame-") || it.name.startsWith("screenveil-frame-")) }
+            ?.forEach { runCatching { it.delete() } }
     }
 }
 
 @Composable
-private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
+private fun ScreenVeilHome(
+    accessibilityEnabled: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit
+) {
     val context = LocalContext.current
     val preferences = remember { AppPreferences(context) }
     val protection by ProtectionStatus.state.collectAsState()
@@ -194,21 +189,52 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
                         tint = if (protection.active) Color(0xFF22643C) else MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(if (protection.active) "Protection session" else "Protection is off", fontWeight = FontWeight.SemiBold)
+                    Text(if (protection.active) "Protection active / starting" else "Protection is paused", fontWeight = FontWeight.SemiBold)
                 }
                 Text(protection.message, style = MaterialTheme.typography.bodyMedium)
                 if (protection.lastInferenceMs != null) {
-                    Text("Last analysis: ${protection.lastInferenceMs} ms · ${protection.regionsRedacted} redacted region(s)", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Last analysis: ${protection.lastInferenceMs} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
-                if (protection.error != null) Text(protection.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (protection.error != null) {
+                    Text(protection.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = onStart, enabled = !protection.active && modelInstalled && !downloadRunning, modifier = Modifier.weight(1f)) {
-                        Text("Start protection")
-                    }
-                    OutlinedButton(onClick = onStop, enabled = protection.active, modifier = Modifier.weight(1f)) {
-                        Text("Stop")
-                    }
+                    Button(
+                        onClick = onStart,
+                        enabled = !protection.active && modelInstalled && !downloadRunning,
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (accessibilityEnabled) "Start protection" else "Enable protection") }
+                    OutlinedButton(
+                        onClick = onStop,
+                        enabled = protection.active || preferences.isProtectionEnabled(),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Stop") }
                 }
+                OutlinedButton(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (accessibilityEnabled) "Accessibility settings · Enabled" else "Enable once in Accessibility settings")
+                }
+            }
+        }
+
+        Card {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("One-time Android setup", fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (accessibilityEnabled) {
+                        "ScreenVeil is enabled in Android Accessibility. When protection is on, it checks the active app window automatically after screen changes. No screen-sharing or screen-recording session is started."
+                    } else {
+                        "Enable ScreenVeil once in Android Settings → Accessibility → Installed apps. Android requires this manual approval. Afterward, when the verified model is installed and protection is on, ScreenVeil checks the active app window automatically."
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "ScreenVeil requests screenshots of the active application window and reads only accessibility event metadata plus window IDs and bounds needed to place redaction masks. It does not inspect view nodes, read app text, tap controls, or perform gestures.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -219,7 +245,7 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
                 Text("Google LiteRT Community · Apache-2.0 · multimodal image input", style = MaterialTheme.typography.bodySmall)
                 Text("Approx. 2.6 GB. The model is stored in private app storage and is never bundled in the APK.", style = MaterialTheme.typography.bodyMedium)
                 Text("Source: ${GemmaModelCatalog.selected.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("SHA-256 checked before loading", style = MaterialTheme.typography.labelSmall, color = Color(0xFF22643C))
+                Text("Immutable model revision and SHA-256 checked before loading", style = MaterialTheme.typography.labelSmall, color = Color(0xFF22643C))
                 if (modelInstalled) {
                     Text("Installed and verified", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
                 } else if (downloadRunning) {
@@ -242,6 +268,9 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
                                     }
                                     modelInstalled = true
                                     downloadLabel = "Verified and installed: ${file.name}"
+                                    if (accessibilityEnabled && preferences.isProtectionEnabled()) {
+                                        ScreenProtectionAccessibilityService.requestStart()
+                                    }
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                     throw cancelled
                                 } catch (error: Exception) {
@@ -254,9 +283,11 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Download and verify Gemma 4") }
                 }
-                if (downloadError != null) Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (downloadError != null) {
+                    Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 Text(
-                    "Trusted model catalogue · Gemma 4 is the only approved model in this build. Additional models will appear only after their publisher, license, runtime compatibility and pinned checksum have been reviewed.",
+                    "Only Gemma 4 is approved in this build. The model is downloaded only after you press the button. Detection runs offline after installation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -285,11 +316,11 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
                     steps = 6
                 )
                 Divider()
-                Text("Analysis interval: ${settings.frameIntervalMs / 1000.0}s", fontWeight = FontWeight.Medium)
+                Text("Screenshot check interval: ${settings.frameIntervalMs / 1000.0}s (minimum 0.75s)", fontWeight = FontWeight.Medium)
                 Slider(
                     value = settings.frameIntervalMs.toFloat(),
                     onValueChange = { value -> settings = settings.copy(frameIntervalMs = value.toLong()).also(preferences::saveSettings) },
-                    valueRange = 1_000f..5_000f,
+                    valueRange = 750f..5_000f,
                     steps = 7
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -318,13 +349,14 @@ private fun ScreenVeilHome(onStart: () -> Unit, onStop: () -> Unit) {
         SectionTitle("Privacy and limitations")
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("• Screen frames are processed locally. No screenshots are uploaded or retained as a gallery.")
-                Text("• Internet access is used only when you explicitly download the model.")
-                Text("• Android may exclude protected FLAG_SECURE content from screen capture.")
-                Text("• Select “Entire screen” in Android's capture dialog to monitor other applications.")
-                Text("• Gemma-generated media boxes are estimates. This experimental application can miss content, classify it incorrectly, or show blur with a delay. It is not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
-                Text("• A running foreground notification and overlay permission are required. Stop protection before uninstalling or changing capture permissions.")
-                Text("• Redaction uses one overlay window per media region. Android may block taps directly inside a redacted region; areas outside those rectangles remain unobstructed.", style = MaterialTheme.typography.bodySmall)
+                Text("• Screenshots are requested through Android AccessibilityService only after you explicitly enable ScreenVeil in Accessibility settings.")
+                Text("• No MediaProjection session, screen-recording dialog, foreground capture notification or Display over other apps permission is used.")
+                Text("• Screen pixels are analyzed locally. No screenshots are uploaded or stored as a gallery; short-lived model input files are kept in private cache and deleted after inference.")
+                Text("• Internet access is used only when you explicitly download Gemma 4.")
+                Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")
+                Text("• Android rate-limits accessibility screenshots. Capture is event-triggered with periodic refresh, not a 30-FPS video recording. Fast video may be only partially inspected.", color = MaterialTheme.colorScheme.error)
+                Text("• Gemma-generated media boxes are estimates. The model can miss content, classify it incorrectly or produce delayed redaction. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
+                Text("• Accessibility access is powerful. ScreenVeil uses events only to schedule screenshots and does not read window text, inspect view nodes, tap, or control other apps.", style = MaterialTheme.typography.bodySmall)
             }
         }
         Spacer(Modifier.height(20.dp))

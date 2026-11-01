@@ -33,3 +33,8 @@ The CI run against the API-36 dependency set reached `:app:compileDebugKotlin` a
 The LiteRT-LM API behavior is checked against the upstream `v0.18.0` source, not inferred from a later release: <https://github.com/google-ai-edge/LiteRT-LM/blob/v0.18.0/kotlin/java/com/google/ai/edge/litertlm/Message.kt>.
 
 The corresponding Compose `weight` API is scoped to `RowScope`/`ColumnScope`; the calls in this UI are inside the appropriate `Row` content lambdas.
+
+
+## Accessibility screenshot API baseline
+
+The capture implementation requires Android API 34 / Android 14 because it uses `AccessibilityService.takeScreenshotOfWindow(int, Executor, TakeScreenshotCallback)`. The manifest sets `minSdk = 34`; CI still compiles against API 36. `canTakeScreenshot=true` must remain in `res/xml/accessibility_service_config.xml`, and `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` must be enabled to obtain the active application window ID and bounds. Do not replace this with a MediaProjection flow without an explicit product decision.

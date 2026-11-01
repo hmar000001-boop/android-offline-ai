@@ -12,15 +12,21 @@ class AppPreferences(context: Context) {
             RedactionEffect.valueOf(prefs.getString(KEY_EFFECT, RedactionEffect.GAUSSIAN_BLUR.name)!!)
         }.getOrDefault(RedactionEffect.GAUSSIAN_BLUR),
         intensity = prefs.getInt(KEY_INTENSITY, 18).coerceIn(4, 32),
-        frameIntervalMs = prefs.getLong(KEY_INTERVAL, 1_500L).coerceIn(1_000L, 5_000L),
+        frameIntervalMs = prefs.getLong(KEY_INTERVAL, 1_500L).coerceIn(MIN_CAPTURE_INTERVAL_MS, 5_000L),
         redactUncertain = prefs.getBoolean(KEY_UNCERTAIN, true)
     )
+
+    fun isProtectionEnabled(): Boolean = prefs.getBoolean(KEY_PROTECTION_ENABLED, true)
+
+    fun setProtectionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PROTECTION_ENABLED, enabled).apply()
+    }
 
     fun saveSettings(settings: ModerationSettings) {
         prefs.edit()
             .putString(KEY_EFFECT, settings.effect.name)
             .putInt(KEY_INTENSITY, settings.intensity.coerceIn(4, 32))
-            .putLong(KEY_INTERVAL, settings.frameIntervalMs.coerceIn(1_000L, 5_000L))
+            .putLong(KEY_INTERVAL, settings.frameIntervalMs.coerceIn(MIN_CAPTURE_INTERVAL_MS, 5_000L))
             .putBoolean(KEY_UNCERTAIN, settings.redactUncertain)
             .apply()
     }
@@ -30,5 +36,7 @@ class AppPreferences(context: Context) {
         private const val KEY_INTENSITY = "redaction_intensity"
         private const val KEY_INTERVAL = "frame_interval_ms"
         private const val KEY_UNCERTAIN = "redact_uncertain"
+        private const val KEY_PROTECTION_ENABLED = "protection_enabled"
+        private const val MIN_CAPTURE_INTERVAL_MS = 750L
     }
 }

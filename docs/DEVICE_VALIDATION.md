@@ -1,82 +1,57 @@
-# Galaxy S24 FE device-validation plan
+# Device validation plan — Samsung Galaxy S24 FE
 
-This plan is required before treating ScreenVeil as more than an experimental build.
+This plan is mandatory before treating ScreenVeil as a practical daily-use filter. The app's current APK is experimental. GitHub CI can prove compilation and unit tests; only a real device can establish accessibility screenshot behavior, overlay alignment, Gemma performance, battery use and thermal stability.
 
-## Device and software record
+## First-run and service lifecycle
 
-Record the following before each test run:
+1. Install the debug APK on the Galaxy S24 FE (Android 14/API 34 or newer).
+2. Open ScreenVeil. Confirm there is no MediaProjection/screen-recording permission flow and no request for Display over other apps.
+3. Start the user-initiated Gemma download. Confirm progress and exact model verification before the model is reported installed.
+4. Tap **Enable protection** and enable ScreenVeil manually in Android Settings → Accessibility → Installed apps.
+5. Return to another application. Confirm the service initializes Gemma and starts inspecting screenshots without a screen-sharing dialog or a persistent capture foreground-service notification.
+6. Open ScreenVeil itself. Confirm its own UI is not scanned and no redaction overlay is displayed over ScreenVeil.
+7. Press Stop in ScreenVeil. Confirm screenshots stop and masks clear while Android Accessibility settings still show the service enabled.
+8. Re-enable protection; reboot; force-stop/relaunch; turn the accessibility service off/on. Confirm saved preference and Android's service lifecycle behave as documented.
 
-- Exact Galaxy S24 FE model / region and Android version.
-- One UI version and security patch level.
-- Screen resolution, refresh rate, battery percentage and free storage.
-- ScreenVeil APK version and SHA-256.
-- Gemma artifact SHA-256 and LiteRT-LM runtime version (`0.18.0`).
-- Selected backend (GPU or CPU fallback).
-- Test start/end time and ambient temperature if available.
+## Capture and window coordinate correctness
 
-## Functional acceptance checks
+1. Open Samsung Gallery with a single test image that fills most of the app window. Confirm screenshot capture succeeds and the `HardwareBuffer` path closes resources.
+2. Test an image in a feed, multiple visible image cards, a browser page, and a video player. Confirm the chosen active application window ID and its bounds match the screenshot buffer.
+3. Compare overlay coordinates to the source pixels at portrait and landscape orientation, with status/navigation bars and edge-to-edge content.
+4. Test split-screen, floating windows, picture-in-picture, popups and dialogs. Confirm ScreenVeil either aligns correctly or reports an unsupported window shape rather than placing a mask at an incorrect location.
+5. Confirm `takeScreenshotOfWindow()` does not include ScreenVeil's own accessibility-overlay masks in subsequent captures.
+6. Open a `FLAG_SECURE` screen and DRM-protected video. Confirm Android refuses the screenshot and ScreenVeil does not attempt a workaround.
+7. Rapidly scroll and change applications. Confirm stale masks are cleared before new-window coordinates are applied.
+8. Trigger screenshot rate limiting in a test build. Confirm the status reports throttling and retries do not create an unbounded queue.
 
-1. Install the debug APK from the GitHub Actions artifact.
-2. Verify that the model download is user-initiated and that the UI shows progress.
-3. Interrupt a download and relaunch; ensure an incomplete `.part` file is not treated as installed.
-4. Download the model and confirm the app reports it as installed only after SHA-256 verification.
-5. Modify a test copy of the downloaded model file; start protection and confirm the app rejects it before engine initialization.
-6. Deny overlay permission; confirm capture does not start.
-7. Grant overlay permission and deny notification permission on Android 13+; verify the documented FGS behavior and that the user can still stop the session.
-8. Start capture and select **Entire screen**. Confirm other app windows are visible to the captured stream where Android permits it.
-9. Stop using the app button, notification Stop action, Android projection stop affordance and permission revocation.
-10. Rotate the device and verify the capture surface resizes without leaving old-coordinate masks.
-11. Open a protected `FLAG_SECURE` screen and confirm the app does not attempt to bypass capture restrictions.
-12. Verify the overlay is non-touchable and does not steal taps or keyboard focus.
-13. Test all three redaction effects and intensity settings.
-14. Verify all preferences survive process death/relaunch.
-15. Confirm no screenshot or temporary frame remains after normal inference; after force-stop, relaunch and check cache cleanup.
+## Gemma structured-output validation
 
-## Model quality benchmark
+1. Verify model SHA-256 before engine initialization.
+2. On the first run, test GPU initialization and CPU fallback; record selected backend and load time.
+3. Confirm `ExperimentalFlags.enableSpeculativeDecoding=false` is set before engine construction and `enableResponseFormat=true` / `ResponseFormat.json(schema)` is supplied for each conversation.
+4. Test a single full-screen beach/swimwear photo in Samsung Gallery. Expected output: one media region classified as `swimwear`; expected behavior: its full media rectangle is redacted.
+5. Repeat with ordinary clothing, non-swimwear beach scenes, sportswear, suggestive poses, explicit content, artworks and ordinary UI screenshots.
+6. Test images within feeds and multiple media regions. Measure box intersection-over-union and decision accuracy against human labels.
+7. Confirm incomplete JSON, malformed boxes, unknown categories, empty text and inference exceptions are shown as errors—not interpreted as safe.
+8. Record invalid/timeout rate over at least 100 varied inputs. A constrained format is not a guarantee of correct visual understanding.
 
-Use only lawfully obtained, properly licensed evaluation media. Separate development/tuning data from a held-out test set. Keep adult-content evaluation to adults; do not use this model as a child-safety classifier.
+## Performance and thermal validation
 
-Suggested strata:
-
-- ordinary safe images and ordinary clothing;
-- all forms of swimwear (beach, pool, sports, varied poses and lighting);
-- revealing clothing / lingerie;
-- suggestive poses and sexualized presentation;
-- explicit nudity;
-- sexual activity;
-- artwork, statues, medical material and other ambiguous contexts;
-- screenshots with multiple media items, overlapping cards, small thumbnails, captions, UI controls and picture-in-picture.
+Use lawfully obtained, properly licensed test images/videos and test sustained operation for at least 30 minutes.
 
 Measure:
 
-- media-region detection recall (did Gemma find each media rectangle?);
-- box intersection-over-union against human annotations;
-- per-category precision and recall;
-- swimwear recall (the user's strict rule);
-- safe-content false-positive rate;
-- false-negative rate by media size and screen layout;
-- malformed/invalid JSON rate;
-- time from frame receipt to overlay display;
-- P50/P95 inference latency;
-- peak process RSS / PSS and native heap;
-- battery drain and device temperature over at least 30 minutes;
-- sustained behavior at 1.0, 1.5, 3.0 and 5.0 second analysis intervals.
+- screenshot success rate and rate-limit failures;
+- median/P95 time from screenshot request to overlay update;
+- Gemma model initialization time and peak RAM/PSS/native heap;
+- GPU and CPU fallback latency separately;
+- battery drain and device temperature;
+- dropped/overlapping events and inference queue growth;
+- correctness of screen-to-overlay coordinate transformation;
+- behavior at 0.75, 1.5, 3 and 5 second analysis intervals.
 
-Do not report a single aggregate accuracy number as sufficient. Report each stratum and confidence intervals. A false negative on a category the user wants redacted must be visible in the report.
+Do not describe this as smooth frame-by-frame video protection unless sustained frame throughput and latency measurements substantiate that claim. The current design samples screenshots, not a video stream.
 
 ## Stop criteria
 
-Stop testing and do not recommend daily use if any of the following occurs:
-
-- repeated projection or overlay crashes;
-- system UI becomes unresponsive;
-- the app repeatedly loses the capture or overlay permission;
-- the model cannot stay resident without memory pressure or system process kills;
-- CPU fallback latency makes redaction effectively unusable;
-- thermal throttling or battery drain is excessive;
-- model outputs are inconsistent enough that redactions are misleading;
-- privacy checks reveal frame files or model input being sent off-device.
-
-## Expected result
-
-A successful GitHub build proves only that the project compiles and tests pass. It does not prove model quality, live-screen coordinate accuracy, battery suitability, thermal suitability or compatibility with every app. Those require device testing and a separately reviewed evaluation set.
+Do not recommend daily use if the app repeatedly crashes, produces persistent misaligned masks, destabilizes the UI, fails to release screenshot buffers/bitmaps, causes excessive battery or thermal load, cannot keep Gemma resident, or generates materially unreliable classifications/boxes.

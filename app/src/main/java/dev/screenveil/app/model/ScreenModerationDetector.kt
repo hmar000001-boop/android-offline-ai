@@ -8,14 +8,18 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.ExperimentalFlags
+import com.google.ai.edge.litertlm.ResponseFormat
+import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import dev.screenveil.app.policy.ContentDecision
 import org.json.JSONObject
 import java.io.File
 
 /**
  * Runs one isolated image inspection per conversation so screen frames do not accumulate
- * conversational history. Every Engine/Conversation call is made by the owning single-thread
- * executor in ScreenProtectionService.
+ * conversational history. Engine and Conversation calls are confined to the owning worker thread.
  */
 interface ScreenContentDetector : AutoCloseable {
     val activeBackend: String
@@ -29,9 +33,15 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
     override var activeBackend: String = "Not loaded"
         private set
 
+    @OptIn(ExperimentalApi::class)
     override fun initialize(modelFile: File) {
         check(engine == null) { "Model engine is already initialized" }
         require(modelFile.isFile) { "Gemma model file is missing" }
+
+        // Gemma 4 E2B + constrained JSON has an upstream MTP/speculative-decoding defect in
+        // LiteRT-LM 0.18.0. Force it off before Engine creation, and again per conversation.
+        // See the linked upstream issue in docs/GEMMA_STRUCTURED_OUTPUT.md.
+        ExperimentalFlags.enableSpeculativeDecoding = false
 
         val gpuEngine = Engine(
             EngineConfig(
@@ -47,8 +57,8 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
             activeBackend = "GPU"
             return
         } catch (_: Throwable) {
-            // LiteRT-LM requires that an Engine whose initialize() threw is not closed.
-            // GPU support varies by Android device/vendor, so try the supported CPU backend.
+            // GPU delegates vary by vendor. Release the failed engine before creating a fresh CPU engine.
+            runCatching { gpuEngine.close() }
         }
 
         val cpuEngine = Engine(
@@ -59,24 +69,31 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                 cacheDir = context.cacheDir.absolutePath
             )
         )
-        cpuEngine.initialize()
-        engine = cpuEngine
-        activeBackend = "CPU"
+        try {
+            cpuEngine.initialize()
+            engine = cpuEngine
+            activeBackend = "CPU"
+        } catch (error: Throwable) {
+            runCatching { cpuEngine.close() }
+            throw error
+        }
     }
 
     override fun inspect(bitmap: Bitmap): DetectionResult {
         val currentEngine = checkNotNull(engine) { "Gemma is not initialized" }
-        val imageFile = File(context.cacheDir, "screen-frame-${System.nanoTime()}.jpg")
-        val imageForModel = resizedForVision(bitmap, 1280)
+        val imageFile = File(context.cacheDir, "screenveil-frame-${System.nanoTime()}.jpg")
+        val imageForModel = resizedForVision(bitmap, MAX_IMAGE_SIDE)
         try {
             imageFile.outputStream().buffered().use { output ->
-                check(imageForModel.compress(Bitmap.CompressFormat.JPEG, 88, output)) { "Could not encode screen frame" }
+                check(imageForModel.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
+                    "Could not encode screen frame"
+                }
             }
             return try {
                 sendImage(currentEngine, imageFile)
             } catch (gpuError: Throwable) {
                 if (activeBackend != "GPU") throw gpuError
-                // GPU delegates vary by vendor. A failed GPU inference is retried once on CPU.
+                // A vendor GPU delegate can fail after initialization. Retry once on CPU.
                 runCatching { currentEngine.close() }
                 engine = null
                 val fallback = Engine(
@@ -87,7 +104,12 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                         cacheDir = context.cacheDir.absolutePath
                     )
                 )
-                fallback.initialize()
+                try {
+                    fallback.initialize()
+                } catch (fallbackInitError: Throwable) {
+                    runCatching { fallback.close() }
+                    throw fallbackInitError
+                }
                 engine = fallback
                 activeBackend = "CPU (fallback)"
                 try {
@@ -100,6 +122,8 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                 }
             }
         } finally {
+            // The temporary image is private app-cache input for LiteRT-LM and is deleted even
+            // when inference throws or is cancelled by service shutdown.
             imageFile.delete()
             if (imageForModel !== bitmap) imageForModel.recycle()
         }
@@ -118,14 +142,29 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
     }
 
     private fun sendImage(target: Engine, imageFile: File): DetectionResult =
-        target.createConversation(ConversationConfig(maxOutputToken = 512)).use { conversation ->
+        target.createConversation(
+            ConversationConfig(
+                samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0, seed = 7),
+                maxOutputToken = MAX_OUTPUT_TOKENS,
+                thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
+                enableResponseFormat = true,
+                enableSpeculativeDecoding = false
+            )
+        ).use { conversation ->
             val response = conversation.sendMessage(
                 Contents.of(
                     Content.ImageFile(imageFile.absolutePath),
                     Content.Text(PROMPT)
-                )
+                ),
+                maxOutputToken = MAX_OUTPUT_TOKENS,
+                thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
+                responseFormat = ResponseFormat.json(RESPONSE_SCHEMA)
             )
-            DetectionResponseParser.parse(response.toString())
+            // Read explicit text content parts; do not depend on Message.toString() formatting.
+            val responseText = response.contents.contents
+                .filterIsInstance<Content.Text>()
+                .joinToString(separator = "") { it.text }
+            DetectionResponseParser.parse(responseText)
         }
 
     override fun close() {
@@ -135,33 +174,66 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
     }
 
     companion object {
+        private const val MAX_IMAGE_SIDE = 1280
+        private const val JPEG_QUALITY = 88
+        private const val MAX_OUTPUT_TOKENS = 320
+
+        /**
+         * Deliberately uses a compact JSON Schema supported by LiteRT-LM 0.18.0's
+         * ResponseFormat.json. Numeric range and rectangle geometry are revalidated in Kotlin.
+         */
+        private val RESPONSE_SCHEMA = """
+            {
+              "type": "object",
+              "properties": {
+                "regions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "box": { "type": "array", "items": { "type": "integer" } },
+                      "media_type": { "type": "string", "enum": ["image", "video", "thumbnail"] },
+                      "decision": { "type": "string", "enum": ["allow", "swimwear", "suggestive", "explicit", "uncertain"] }
+                    },
+                    "required": ["box", "media_type", "decision"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["regions"],
+              "additionalProperties": false
+            }
+        """.trimIndent()
+
         private val PROMPT = """
-            You are an on-device screen moderation and visual media-region detector.
-            Inspect this full-screen screenshot. Find visible media regions only: photographs,
-            video frames, video thumbnails, or image posts. Do not return text-only cards, icons,
-            app chrome, buttons, or plain backgrounds. For each media region, return the smallest
-            rectangle that contains that complete media item (not the entire app card).
+            Inspect this screenshot for visible photographic or video media. This includes a photo
+            opened by itself in a Gallery/Photos viewer: if a photograph fills nearly the entire
+            screen, it IS a media region and must be returned. Also find photos in feeds, galleries,
+            browser pages, video players and thumbnails. Ignore text-only cards, app chrome, icons,
+            buttons and plain backgrounds.
 
-            Classify each media region using exactly one decision:
-            - allow: no swimwear, no suggestive imagery, no explicit nudity or sexual activity.
-            - swimwear: any visible swimwear, including ordinary beach and sports swimwear.
-            - suggestive: revealing/sexualized presentation, suggestive pose, or suggestive imagery.
+            For every media item, return the tight rectangle containing the visible image/video
+            pixels. If the item is displayed full-screen, use a box close to [0,0,1000,1000]. If
+            several media items are visible, return a separate rectangle for each. Do not omit an
+            image just because it is the only image on screen or because viewer controls cover part
+            of it.
+
+            Classify each media item with exactly one decision:
+            - allow: ordinary clothing and media without swimwear, suggestive presentation, explicit
+              nudity or sexual activity.
+            - swimwear: ANY swimwear, including ordinary beach photographs, bikinis, swimsuits,
+              swim trunks, pool scenes and sports swimwear. The user's policy is to redact all of it.
+            - suggestive: revealing or sexualized presentation, suggestive pose, or suggestive imagery.
             - explicit: explicit nudity or sexual activity.
-            - uncertain: the media is visible but you cannot confidently determine its category.
+            - uncertain: a visible media item whose category cannot be confidently determined.
 
-            The screen owner's policy is to redact ALL swimwear, including ordinary beach scenes.
-            Do not decide that ordinary swimwear is safe. If multiple media items are visible,
-            return a separate rectangle for each. If no media regions are visible, return an empty
-            regions array.
+            Never label swimwear as allow. When uncertain, choose uncertain. If no photographic or
+            video media is visible, return an empty regions array.
 
-            Return ONLY a JSON object with this exact schema:
-            {"regions":[{"box":[left,top,right,bottom],"media_type":"image|video|thumbnail",
-            "decision":"allow|swimwear|suggestive|explicit|uncertain","is_swimwear":false}]}
-
-            Coordinates must be integers from 0 to 1000, normalized against the entire supplied
-            image: (0,0) is its top-left and (1000,1000) its bottom-right. Box order is
-            left, top, right, bottom. Make boxes tight and do not invent regions. Do not include
-            markdown, confidence scores, comments, or any text outside the JSON object.
+            Each box is [left, top, right, bottom] as integer coordinates normalized from 0 to 1000
+            against the full screenshot. The origin is the top-left. Return tight, ordered boxes with
+            left < right and top < bottom. Do not invent regions or text. Return the JSON object
+            required by the response schema and nothing else.
         """.trimIndent()
     }
 }
@@ -180,71 +252,74 @@ data class DetectionResult(
     val diagnostic: String? = null
 )
 
+/** Strict parser for the schema-constrained LiteRT-LM JSON response. */
 object DetectionResponseParser {
     private const val MAX_REGIONS = 8
+    private val ROOT_KEYS = setOf("regions")
+    private val REGION_KEYS = setOf("box", "media_type", "decision")
 
-    /**
-     * Fail-closed parsing: a malformed response is not interpreted as an all-safe screen.
-     * Coordinates are normalized to 0..1000 and every accepted region must be non-trivial.
-     */
     fun parse(raw: String): DetectionResult {
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        if (start < 0 || end <= start) {
-            return DetectionResult(emptyList(), false, "No complete JSON object")
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || !trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+            return DetectionResult(emptyList(), false, "Model did not return a complete JSON object")
         }
         return try {
-            val root = JSONObject(raw.substring(start, end + 1))
-            val array = root.optJSONArray("regions")
-                ?: return DetectionResult(emptyList(), false, "Missing regions array")
+            val root = JSONObject(trimmed)
+            if (root.keys().asSequence().toSet() != ROOT_KEYS) {
+                return DetectionResult(emptyList(), false, "Unexpected or missing top-level JSON fields")
+            }
+            val array = root.getJSONArray("regions")
             if (array.length() > MAX_REGIONS) {
                 return DetectionResult(emptyList(), false, "Too many media regions")
             }
 
             val parsed = ArrayList<DetectedMediaRegion>(array.length())
-            for (i in 0 until array.length()) {
-                val item = array.optJSONObject(i)
-                    ?: return DetectionResult(emptyList(), false, "Region $i is not an object")
-                val boxArray = item.optJSONArray("box")
-                    ?: return DetectionResult(emptyList(), false, "Region $i has no box")
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                if (item.keys().asSequence().toSet() != REGION_KEYS) {
+                    return DetectionResult(emptyList(), false, "Region $index has unexpected or missing fields")
+                }
+                val boxArray = item.getJSONArray("box")
                 if (boxArray.length() != 4) {
-                    return DetectionResult(emptyList(), false, "Region $i box must contain four coordinates")
+                    return DetectionResult(emptyList(), false, "Region $index box must contain four coordinates")
                 }
-                val coords = (0..3).map { boxArray.optDouble(it, Double.NaN) }
-                if (coords.any { !it.isFinite() || it < 0.0 || it > 1000.0 }) {
-                    return DetectionResult(emptyList(), false, "Region $i coordinates are outside 0..1000")
+                val coords = IntArray(4)
+                for (position in 0 until 4) {
+                    val value = boxArray.get(position)
+                    if (value !is Number) {
+                        return DetectionResult(emptyList(), false, "Region $index contains a non-numeric coordinate")
+                    }
+                    val number = value.toDouble()
+                    if (!number.isFinite() || number % 1.0 != 0.0 || number < 0.0 || number > 1000.0) {
+                        return DetectionResult(emptyList(), false, "Region $index coordinates must be integers from 0 to 1000")
+                    }
+                    coords[position] = number.toInt()
                 }
-                val left = coords[0].toInt()
-                val top = coords[1].toInt()
-                val right = coords[2].toInt()
-                val bottom = coords[3].toInt()
-                if (right - left < 18 || bottom - top < 18) {
-                    return DetectionResult(emptyList(), false, "Region $i box is too small or inverted")
+                val left = coords[0]
+                val top = coords[1]
+                val right = coords[2]
+                val bottom = coords[3]
+                if (right <= left || bottom <= top || right - left < 18 || bottom - top < 18) {
+                    return DetectionResult(emptyList(), false, "Region $index box is inverted or too small")
                 }
 
-                val decision = when {
-                    item.optBoolean("is_swimwear", false) -> ContentDecision.SWIMWEAR
-                    else -> when (item.optString("decision", "uncertain").lowercase()) {
-                        "allow", "safe" -> ContentDecision.ALLOW
-                        "swimwear" -> ContentDecision.SWIMWEAR
-                        "suggestive" -> ContentDecision.SUGGESTIVE
-                        "explicit" -> ContentDecision.EXPLICIT
-                        "uncertain" -> ContentDecision.UNCERTAIN
-                        else -> ContentDecision.UNCERTAIN
-                    }
+                val decision = when (item.getString("decision")) {
+                    "allow" -> ContentDecision.ALLOW
+                    "swimwear" -> ContentDecision.SWIMWEAR
+                    "suggestive" -> ContentDecision.SUGGESTIVE
+                    "explicit" -> ContentDecision.EXPLICIT
+                    "uncertain" -> ContentDecision.UNCERTAIN
+                    else -> return DetectionResult(emptyList(), false, "Region $index has an unknown decision")
                 }
-                val mediaType = item.optString("media_type", "image").lowercase()
-                    .takeIf { it in setOf("image", "video", "thumbnail") }
-                    ?: return DetectionResult(emptyList(), false, "Region $i has an unknown media type")
-                parsed += DetectedMediaRegion(
-                    NormalizedBox(left, top, right, bottom),
-                    decision,
-                    mediaType
-                )
+                val mediaType = item.getString("media_type")
+                if (mediaType !in setOf("image", "video", "thumbnail")) {
+                    return DetectionResult(emptyList(), false, "Region $index has an unknown media type")
+                }
+                parsed += DetectedMediaRegion(NormalizedBox(left, top, right, bottom), decision, mediaType)
             }
             DetectionResult(parsed, true)
         } catch (error: Exception) {
-            DetectionResult(emptyList(), false, "Invalid model JSON: ${error.javaClass.simpleName}")
+            DetectionResult(emptyList(), false, "Invalid structured model response: ${error.javaClass.simpleName}")
         }
     }
 }

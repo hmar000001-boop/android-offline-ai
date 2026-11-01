@@ -7,19 +7,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DetectionResponseParserTest {
-    @Test fun parsesSwimwearAsSwimwearEvenWhenModelSaysAllow() {
-        val response = """{"regions":[{"box":[100,100,800,900],"media_type":"image","decision":"allow","is_swimwear":true}]}"""
+    @Test fun parsesAllSwimwearAsRedactableCategory() {
+        val response = """{"regions":[{"box":[100,100,800,900],"media_type":"image","decision":"swimwear"}]}"""
         val parsed = DetectionResponseParser.parse(response)
         assertTrue(parsed.parseSucceeded)
         assertEquals(1, parsed.regions.size)
-        assertEquals(dev.screenveil.app.policy.ContentDecision.SWIMWEAR, parsed.regions.single().decision)
+        assertEquals(ContentDecision.SWIMWEAR, parsed.regions.single().decision)
+    }
+
+    @Test fun parsesFullScreenBeachPhotoRegion() {
+        val response = """{"regions":[{"box":[0,0,1000,1000],"media_type":"image","decision":"swimwear"}]}"""
+        val parsed = DetectionResponseParser.parse(response)
+        assertTrue(parsed.parseSucceeded)
+        assertEquals(0, parsed.regions.single().box.left)
+        assertEquals(1000, parsed.regions.single().box.bottom)
     }
 
     @Test fun rejectsCoordinatesOutsideNormalizedRange() {
-        val response = """{"regions":[{"box":[-1,0,1200,1000],"decision":"explicit"}]}"""
+        val response = """{"regions":[{"box":[-1,0,1200,1000],"media_type":"image","decision":"explicit"}]}"""
         val parsed = DetectionResponseParser.parse(response)
         assertFalse(parsed.parseSucceeded)
         assertTrue(parsed.regions.isEmpty())
+    }
+
+    @Test fun rejectsNonIntegerCoordinates() {
+        val response = """{"regions":[{"box":[1.5,0,900,900],"media_type":"image","decision":"explicit"}]}"""
+        assertFalse(DetectionResponseParser.parse(response).parseSucceeded)
     }
 
     @Test fun rejectsMalformedRegionRatherThanTreatingItAsSafe() {
@@ -33,8 +46,13 @@ class DetectionResponseParserTest {
         assertTrue(parsed.regions.isEmpty())
     }
 
-    @Test fun rejectsNonJsonOutput() {
-        val parsed = DetectionResponseParser.parse("I cannot inspect this image.")
-        assertFalse(parsed.parseSucceeded)
+    @Test fun rejectsNonJsonOutputAndJsonWrappedInCommentary() {
+        assertFalse(DetectionResponseParser.parse("I cannot inspect this image.").parseSucceeded)
+        assertFalse(DetectionResponseParser.parse("Here is JSON: {\"regions\":[]}").parseSucceeded)
+    }
+
+    @Test fun rejectsUnexpectedFields() {
+        val response = """{"regions":[],"comment":"safe"}"""
+        assertFalse(DetectionResponseParser.parse(response).parseSucceeded)
     }
 }

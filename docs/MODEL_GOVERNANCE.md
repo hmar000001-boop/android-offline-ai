@@ -34,3 +34,8 @@ The `ScreenContentDetector` interface is the extension point for another runtime
 ## Model behavior is not a security guarantee
 
 Gemma 4 is a general-purpose multimodal model. The prompt requests media-region boxes and moderation labels, but prompt instructions do not constitute model fine-tuning or measured classification guarantees. The app validates JSON syntax and coordinate ranges only; it cannot prove the semantic correctness of the model output.
+
+
+## Structured response contract
+
+The detector uses LiteRT-LM 0.18.0 constrained JSON generation (`ResponseFormat.json`) and disables speculative decoding for Gemma 4 E2B. See [`GEMMA_STRUCTURED_OUTPUT.md`](GEMMA_STRUCTURED_OUTPUT.md) for the upstream issue and implementation rationale. A valid JSON document only establishes syntactic conformance; it does not establish that an image region was found or that its moderation label is correct.
