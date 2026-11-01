@@ -125,7 +125,7 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                     Content.Text(PROMPT)
                 )
             )
-            DetectionResponseParser.parse(response.text)
+            DetectionResponseParser.parse(response.toString())
         }
 
     override fun close() {
