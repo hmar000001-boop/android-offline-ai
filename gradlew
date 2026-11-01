@@ -3,8 +3,8 @@
 # and verifies its SHA-256 before executing it. See gradle/wrapper/gradle-wrapper.properties.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="9.6.0"
-SHA256="bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01"
+VERSION="8.13"
+SHA256="20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
 BASE="${GRADLE_USER_HOME:-$HOME/.gradle}/screenveil-wrapper/gradle-${VERSION}"
 BIN="$BASE/gradle-${VERSION}/bin/gradle"
 if [[ ! -x "$BIN" ]]; then

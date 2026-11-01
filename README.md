@@ -45,6 +45,10 @@ Only this one model is approved in the current build. Model runtime integration 
 
 Gemma itself is currently responsible for both media-region discovery and content classification. There is no separate trained screen-layout/object-detection model in this version. This is a deliberate experimental choice and is one of the largest accuracy risks.
 
+## Build toolchain
+
+The build toolchain is pinned to Android Gradle Plugin **8.13.2**, Kotlin Gradle Plugin **2.4.21**, Kotlin Compose compiler plugin **2.4.21**, and Gradle **8.13**. Kotlin 2.4.21 is within the Kotlin team's documented compatibility range for AGP 8.13.2 and Gradle 8.13. This project intentionally uses the AGP 8.13 line rather than AGP 9's new Android DSL, which is not compatible with the legacy `org.jetbrains.kotlin.android` plugin currently required by the selected LiteRT-LM integration.
+
 ## Build the APK
 
 Requirements:
@@ -66,7 +70,7 @@ On Windows:
 gradlew.bat clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-`gradlew` and `gradlew.bat` are small bootstrap scripts that fetch the pinned Gradle 9.6.0 distribution and verify its SHA-256. This repository does not include the binary Gradle Wrapper JAR. GitHub Actions installs the same Gradle version using `gradle/actions/setup-gradle`.
+`gradlew` and `gradlew.bat` are small bootstrap scripts that fetch the pinned Gradle 8.13 distribution and verify its SHA-256. This repository does not include the binary Gradle Wrapper JAR. GitHub Actions installs the same Gradle version using `gradle/actions/setup-gradle`.
 
 The APK is produced at:
 
@@ -78,7 +82,7 @@ This is a debug-signed APK for controlled device testing, not a Play Store relea
 
 ## GitHub Actions
 
-`.github/workflows/android.yml` runs on pushes to `main`, pull requests and manual dispatch. It installs Temurin JDK 21, Android SDK 36, Build Tools 36.0.0 and Gradle 9.6.0, then runs:
+`.github/workflows/android.yml` runs on pushes to `main`, pull requests and manual dispatch. It installs Temurin JDK 21, Android SDK 36, Build Tools 36.0.0 and Gradle 8.13, then runs:
 
 ```bash
 gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug
