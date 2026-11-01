@@ -1,10 +1,16 @@
+# Gradle / Android build outputs
 .gradle/
+build/
 **/build/
 local.properties
-.idea/
+.externalNativeBuild/
+.cxx/
 *.iml
+.idea/
 .DS_Store
-ai-runtime-onnx/src/main/assets/models/viddexa-nano.onnx
-ai-runtime-onnx/src/main/assets/models/model.properties
-ai-runtime-onnx/src/main/assets/models/VIDDEXA-MODEL-CARD.md
-build/
+Thumbs.db
+
+# Model data and temporary frames must never be committed
+*.litertlm
+*.litertlm.part
+screen-frame-*.jpg

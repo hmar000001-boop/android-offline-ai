@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "filterbridge-lab"
-include(":filter-core", ":android-ingest", ":ai-runtime-onnx", ":demo-app")
+rootProject.name = "ScreenVeil"
+include(":app")

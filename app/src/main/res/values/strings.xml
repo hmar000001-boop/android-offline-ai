@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">ScreenVeil</string>
+    <string name="notification_channel_name">Screen protection</string>
+    <string name="notification_channel_description">Shows when offline screen protection is active.</string>
+    <string name="notification_title">ScreenVeil is protecting your screen</string>
+    <string name="notification_stop">Stop protection</string>
+</resources>
