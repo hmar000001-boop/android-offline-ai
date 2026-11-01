@@ -39,12 +39,22 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.19.1")
-    implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    constraints {
+        implementation("androidx.core:core:1.17.0") {
+            version { strictly("1.17.0") }
+            because("ScreenVeil compiles against Android API 36; AndroidX Core 1.18+ raises its compile SDK requirement.")
+        }
+        implementation("androidx.core:core-ktx:1.17.0") {
+            version { strictly("1.17.0") }
+            because("ScreenVeil compiles against Android API 36; AndroidX Core 1.18+ raises its compile SDK requirement.")
+        }
+    }
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.activity:activity-compose:1.12.4")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
 
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = enforcedPlatform("androidx.compose:compose-bom:2025.12.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.compose.ui:ui")

@@ -47,7 +47,10 @@ Gemma itself is currently responsible for both media-region discovery and conten
 
 ## Build toolchain
 
-The build toolchain is pinned to Android Gradle Plugin **8.13.2**, Kotlin Gradle Plugin **2.4.21**, Kotlin Compose compiler plugin **2.4.21**, and Gradle **8.13**. Kotlin 2.4.21 is within the Kotlin team's documented compatibility range for AGP 8.13.2 and Gradle 8.13. This project intentionally uses the AGP 8.13 line rather than AGP 9's new Android DSL, which is not compatible with the legacy `org.jetbrains.kotlin.android` plugin currently required by the selected LiteRT-LM integration.
+The build toolchain is pinned to Android Gradle Plugin **8.13.2**, Kotlin Gradle Plugin **2.4.21**, Kotlin Compose compiler plugin **2.4.21**, and Gradle **8.14.6**. Kotlin 2.4.21 is within the Kotlin team's documented compatibility range for AGP 8.13.2 and Gradle 8.14.6. This project intentionally uses the AGP 8.13 line rather than AGP 9's new Android DSL, which is not compatible with the legacy `org.jetbrains.kotlin.android` plugin currently required by the selected LiteRT-LM integration.
+
+AndroidX dependencies are deliberately pinned to the API-36-compatible line: Compose BOM **2025.12.00** (Compose 1.10.x), AndroidX Core **1.17.0**, Activity Compose **1.12.4**, and Lifecycle **2.9.4**. Compose 1.12.x and AndroidX Core 1.19.x require API 37 / AGP 9.1+, and must not be introduced while this project remains on AGP 8.13.2 and `compileSdk = 36`. The Compose BOM is enforced, and Core versions have strict constraints so transitive dependencies cannot silently upgrade them past the supported compile SDK.
+See [`docs/BUILD_COMPATIBILITY.md`](docs/BUILD_COMPATIBILITY.md) before changing AndroidX, AGP, Kotlin or Gradle versions. The CI build intentionally fails on dependency conflicts rather than suppressing Android AAR metadata checks.
 
 ## Build the APK
 
@@ -70,7 +73,7 @@ On Windows:
 gradlew.bat clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-`gradlew` and `gradlew.bat` are small bootstrap scripts that fetch the pinned Gradle 8.13 distribution and verify its SHA-256. This repository does not include the binary Gradle Wrapper JAR. GitHub Actions installs the same Gradle version using `gradle/actions/setup-gradle`.
+`gradlew` and `gradlew.bat` are small bootstrap scripts that fetch the pinned Gradle 8.14.6 distribution and verify its SHA-256. This repository does not include the binary Gradle Wrapper JAR. GitHub Actions installs the same Gradle version using `gradle/actions/setup-gradle`.
 
 The APK is produced at:
 
@@ -82,7 +85,7 @@ This is a debug-signed APK for controlled device testing, not a Play Store relea
 
 ## GitHub Actions
 
-`.github/workflows/android.yml` runs on pushes to `main`, pull requests and manual dispatch. It installs Temurin JDK 21, Android SDK 36, Build Tools 36.0.0 and Gradle 8.13, then runs:
+`.github/workflows/android.yml` runs on pushes to `main`, pull requests and manual dispatch. It installs Temurin JDK 21, Android SDK 36, Build Tools 36.0.0 and Gradle 8.14.6, then runs:
 
 ```bash
 gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug

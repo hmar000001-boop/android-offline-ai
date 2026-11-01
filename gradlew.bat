@@ -1,7 +1,7 @@
 @echo off
 setlocal
-set VERSION=8.13
-set SHA256=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78
+set VERSION=8.14.6
+set SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
 if "%GRADLE_USER_HOME%"=="" set GRADLE_USER_HOME=%USERPROFILE%\.gradle
 set BASE=%GRADLE_USER_HOME%\screenveil-wrapper\gradle-%VERSION%
 set BIN=%BASE%\gradle-%VERSION%\bin\gradle.bat
