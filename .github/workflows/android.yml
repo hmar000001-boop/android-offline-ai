@@ -129,9 +129,16 @@ jobs:
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
+          # android-emulator-runner executes this block through /bin/sh, not Bash.
+          # Use POSIX shell syntax and preserve Gradle's exit code without pipefail.
           script: |
-            set -o pipefail
-            gradle --no-daemon connectedDebugAndroidTest --stacktrace 2>&1 | tee emulator-tests.log
+            if gradle --no-daemon connectedDebugAndroidTest --stacktrace > emulator-tests.log 2>&1; then
+              gradle_status=0
+            else
+              gradle_status=$?
+            fi
+            cat emulator-tests.log
+            exit "$gradle_status"
 
       - name: Upload emulator lifecycle reports
         if: always()

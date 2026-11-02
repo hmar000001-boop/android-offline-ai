@@ -85,3 +85,11 @@ Source now defaults protection OFF, requires an explicit Start tap after Accessi
 ## 1.5.1 emulator lifecycle tests added
 
 Added Android instrumentation tests for: protection default OFF on clean install; Accessibility service binding without auto-start or overlay; explicit start with no verified model files stopping safely; and idempotent Stop with no remaining ScreenVeil overlay window. GitHub Actions now runs `connectedDebugAndroidTest` on API 34 and API 36 emulator images. These tests have not yet been executed; a successful workflow run is still required.
+
+
+## Emulator runner shell correction (2026-11-02)
+
+The first API 34/API 36 run booted the emulators but failed before Gradle started because the
+runner executes its script through `/bin/sh`, which does not support `set -o pipefail`. The
+emulator command now uses POSIX-compatible status capture and log printing. Emulator tests remain
+unverified until the workflow is rerun successfully. See `EMULATOR_CI_SHELL_FIX.md`.
