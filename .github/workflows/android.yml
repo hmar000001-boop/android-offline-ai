@@ -129,16 +129,18 @@ jobs:
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          # android-emulator-runner executes this block through /bin/sh, not Bash.
-          # Use POSIX shell syntax and preserve Gradle's exit code without pipefail.
-          script: |
-            if gradle --no-daemon connectedDebugAndroidTest --stacktrace > emulator-tests.log 2>&1; then
-              gradle_status=0
-            else
-              gradle_status=$?
-            fi
+          # This action splits `script` at newlines and runs each line separately
+          # through `sh -c`. Keep this as ONE command; the Bash logic lives in a file.
+          script: bash scripts/run-emulator-tests.sh
+
+      - name: Print emulator test log
+        if: always()
+        run: |
+          if [ -f emulator-tests.log ]; then
             cat emulator-tests.log
-            exit "$gradle_status"
+          else
+            echo "No emulator-tests.log was produced."
+          fi
 
       - name: Upload emulator lifecycle reports
         if: always()

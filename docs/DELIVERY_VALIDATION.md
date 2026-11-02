@@ -93,3 +93,14 @@ The first API 34/API 36 run booted the emulators but failed before Gradle starte
 runner executes its script through `/bin/sh`, which does not support `set -o pipefail`. The
 emulator command now uses POSIX-compatible status capture and log printing. Emulator tests remain
 unverified until the workflow is rerun successfully. See `EMULATOR_CI_SHELL_FIX.md`.
+
+## Emulator-runner multiline script parser correction
+
+The API 34/API 36 runner boots were successful, but the second command attempt failed before
+Gradle because `reactivecircus/android-emulator-runner@v2` splits its `script` input on newlines
+and executes every non-empty line separately. The workflow now invokes the checked-in Bash
+script with a single-line `script: bash scripts/run-emulator-tests.sh`. The Bash script captures
+the Gradle and `tee` exit statuses, and the workflow prints/uploads `emulator-tests.log` even
+when the emulator test step fails. The script was syntax-checked and exercised with fake Gradle
+commands returning both 0 and 23; both exit statuses were propagated correctly. Actual Android
+instrumentation execution remains pending.
