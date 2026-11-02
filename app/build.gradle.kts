@@ -71,9 +71,12 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
-    // The instrumentation APK installs Kotlin fixture components (Activity and ContentProvider)
-    // before AndroidJUnitRunner starts. Keep Kotlin's runtime explicitly on the test APK's
-    // runtime classpath; app `implementation` dependencies are not a safe substitute here.
+    // NOTE: this declaration does NOT put the Kotlin runtime into the instrumentation APK.
+    // Android Gradle Plugin leaves libraries the target app already packages out of the
+    // androidTest APK (confirmed on API 34 and 36: no kotlin.* classes in its DEX files).
+    // The fixture Activity/ContentProvider run in the separate dev.screenveil.app.test process
+    // that loads only that APK, so they are written in Java (src/androidTest/java/.../fixture).
+    // Do not add Kotlin sources to the fixture package.
     androidTestImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.21")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")

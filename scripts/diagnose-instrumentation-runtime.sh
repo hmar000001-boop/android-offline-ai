@@ -195,3 +195,10 @@ fi
 
 record ""
 record "Diagnostic complete. No production source or dependencies were modified by this script."
+
+# Regression gate: the fixture provider must start in the instrumentation-only process.
+# CRASHED_MISSING_KOTLIN_INTRINSICS means Kotlin code crept back into the fixture package.
+if grep -q '^PROVIDER_PROBE_RESULT=CRASHED_MISSING_KOTLIN_INTRINSICS' "$SUMMARY"; then
+  echo "FAIL: fixture provider crashed with missing Kotlin runtime. Fixture classes must be Java." >&2
+  exit 1
+fi
