@@ -3,6 +3,7 @@ package dev.screenveil.app
 import android.content.Context
 import dev.screenveil.app.policy.ModerationSettings
 import dev.screenveil.app.policy.RedactionEffect
+import dev.screenveil.app.model.ModelProfile
 
 class AppPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("screenveil_preferences", Context.MODE_PRIVATE)
@@ -17,6 +18,12 @@ class AppPreferences(context: Context) {
     )
 
     fun isProtectionEnabled(): Boolean = prefs.getBoolean(KEY_PROTECTION_ENABLED, true)
+
+    fun getModelProfile(): ModelProfile = ModelProfile.fromStored(prefs.getString(KEY_MODEL_PROFILE, ModelProfile.BALANCED_SPECIALIZED.name))
+
+    fun setModelProfile(profile: ModelProfile) {
+        prefs.edit().putString(KEY_MODEL_PROFILE, profile.name).apply()
+    }
 
     fun setProtectionEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_PROTECTION_ENABLED, enabled).apply()
@@ -37,6 +44,7 @@ class AppPreferences(context: Context) {
         private const val KEY_INTERVAL = "frame_interval_ms"
         private const val KEY_UNCERTAIN = "redact_uncertain"
         private const val KEY_PROTECTION_ENABLED = "protection_enabled"
+        private const val KEY_MODEL_PROFILE = "model_profile"
         private const val MIN_CAPTURE_INTERVAL_MS = 750L
     }
 }

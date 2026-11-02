@@ -16,8 +16,12 @@ import android.view.accessibility.AccessibilityWindowInfo
 import dev.screenveil.app.AppPreferences
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.ModelInstaller
+import dev.screenveil.app.model.ModelProfile
+import dev.screenveil.app.model.ModelIds
+import dev.screenveil.app.model.ModelFiles
 import dev.screenveil.app.model.ScreenContentDetector
 import dev.screenveil.app.model.ScreenModerationDetector
+import dev.screenveil.app.model.SpecializedScreenModerationDetector
 import dev.screenveil.app.overlay.OverlayController
 import dev.screenveil.app.policy.ModerationPolicy
 import java.util.concurrent.ExecutorService
@@ -40,7 +44,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         Thread(runnable, "screenveil-screenshot").apply { priority = Thread.NORM_PRIORITY }
     }
     private val inferenceExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "screenveil-gemma").apply { priority = Thread.NORM_PRIORITY - 1 }
+        Thread(runnable, "screenveil-inference").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
     private val redactionExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "screenveil-redaction").apply { priority = Thread.NORM_PRIORITY }
@@ -60,6 +64,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     @Volatile private var connected = false
     @Volatile private var monitoringRequested = false
     @Volatile private var modelReady = false
+    @Volatile private var loadedProfile: ModelProfile? = null
+    @Volatile private var activeProfileName: String = "Selected model profile"
     @Volatile private var destroyed = false
     @Volatile private var activeRedactions: List<DetectedMediaRegion> = emptyList()
     @Volatile private var activeMediaRegionCount: Int = 0
@@ -155,7 +161,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (!modelReady) {
-            coverMasks("Gemma is loading or unavailable · application window remains covered")
+            coverMasks("${activeProfileName} is loading or unavailable · application window remains covered")
             return
         }
 
@@ -202,35 +208,43 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (!connected || destroyed) return
-        if (!ModelInstaller.isVerifiedInstalled(this)) {
+        val requestedProfile = preferences.getModelProfile()
+        if (!ModelInstaller.isProfileInstalled(this, requestedProfile)) {
+            val missing = requestedProfile.requiredModels
+                .filterNot { ModelInstaller.isVerifiedInstalled(this, it) }
+                .joinToString { it.displayName }
             ProtectionStatus.update(
                 ProtectionStatus.State(
                     active = false,
                     modelReady = false,
-                    message = "Install and verify Gemma 4 before enabling protection",
-                    error = "Gemma model is not installed"
+                    message = "Install and verify all models for ${requestedProfile.title}",
+                    error = "Missing model files: $missing"
                 )
             )
             return
         }
 
+        activeProfileName = requestedProfile.title
         monitoringRequested = true
         preferences.setProtectionEnabled(true)
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = true,
                 modelReady = modelReady,
-                message = if (modelReady) "Starting screen inspection…" else "Gemma is loading · external app windows are covered until the first valid analysis"
+                message = if (modelReady) "Starting screen inspection…" else "${requestedProfile.title} is loading · external app windows are covered until the first valid analysis"
             )
         )
 
-        if (modelReady) {
+        if (modelReady && loadedProfile == requestedProfile) {
             beginMonitoring()
         } else {
+            // Switching profiles invalidates the previous runtime. Close/recreate it on the single
+            // inference executor so Gemma cannot accidentally continue behind a specialist label.
+            modelReady = false
             if (currentForegroundPackage != packageName) {
-                coverMasks("Gemma is loading · screen covered until protection is ready")
+                coverMasks("${requestedProfile.title} is loading · screen covered until protection is ready")
             }
-            if (modelInitializationStarted.compareAndSet(false, true)) initializeModel()
+            if (modelInitializationStarted.compareAndSet(false, true)) initializeModel(requestedProfile)
         }
     }
 
@@ -260,35 +274,51 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun initializeModel() {
+    private fun initializeModel(profile: ModelProfile) {
         try {
             inferenceExecutor.execute {
                 try {
-                    check(ModelInstaller.verifyInstalledBlocking(this)) {
-                        "Gemma model is missing or failed SHA-256 verification. Reinstall it in Settings."
+                    runCatching { detector?.close() }
+                    detector = null
+                    loadedProfile = null
+                    val verifiedFiles = LinkedHashMap<String, java.io.File>()
+                    profile.requiredModels.forEach { model ->
+                        check(ModelInstaller.verifyInstalledBlocking(this, model)) {
+                            "${model.displayName} is missing or failed SHA-256 verification. Reinstall it in Settings."
+                        }
+                        verifiedFiles[model.id] = ModelInstaller.modelFile(this, model)
                     }
-                    val created = ScreenModerationDetector(this)
-                    created.initialize(ModelInstaller.modelFile(this))
+                    val files = ModelFiles(verifiedFiles)
+                    val created: ScreenContentDetector = when (profile) {
+                        ModelProfile.GEMMA_VISION -> ScreenModerationDetector(this)
+                        ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector(this)
+                    }
+                    created.initialize(files)
                     if (destroyed) {
                         created.close()
                         return@execute
                     }
                     detector = created
+                    loadedProfile = profile
                     consecutiveModelFailures = 0
                     modelReady = true
+                    modelInitializationStarted.set(false)
                     mainHandler.post {
                         if (!destroyed && monitoringRequested) {
                             ProtectionStatus.update(
                                 ProtectionStatus.State(
                                     active = true,
                                     modelReady = true,
-                                    message = "Protection active · Gemma 4 ${created.activeBackend} backend"
+                                    message = "Protection active · ${profile.title} · ${created.activeBackend}"
                                 )
                             )
                             beginMonitoring()
                         }
                     }
                 } catch (error: Throwable) {
+                    runCatching { detector?.close() }
+                    detector = null
+                    loadedProfile = null
                     modelReady = false
                     modelInitializationStarted.set(false)
                     val detail = error.message ?: error.javaClass.simpleName
@@ -297,7 +327,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             // Do not silently disable protection after a model-load failure. Keep
                             // the opaque window cover in place and let the user open ScreenVeil
                             // to retry or explicitly stop protection.
-                            coverMasks("Gemma could not be loaded · application window remains covered")
+                            coverMasks("${profile.title} could not be loaded · application window remains covered")
                             ProtectionStatus.update(ProtectionStatus.state.value.copy(error = detail, modelReady = false))
                         }
                     }
@@ -305,7 +335,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             }
         } catch (_: RejectedExecutionException) {
             modelInitializationStarted.set(false)
-            ProtectionStatus.setMessage("Could not start the Gemma worker")
+            ProtectionStatus.setMessage("Could not start the ${profile.title} worker")
         }
     }
 
@@ -550,7 +580,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             inferenceExecutor.execute {
                 try {
                     if (destroyed || !monitoringRequested || captureGeneration != maskGeneration.get()) return@execute
-                    val currentDetector = detector ?: error("Gemma engine is not available")
+                    val currentDetector = detector ?: error("Selected model profile is not available")
                     val started = SystemClock.elapsedRealtime()
                     val result = currentDetector.inspect(frame)
                     val elapsed = SystemClock.elapsedRealtime() - started
@@ -558,7 +588,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
                     if (!result.parseSucceeded) {
                         recordModelFailure(
-                            "Gemma returned an invalid result · app window covered",
+                            "${activeProfileName} returned an invalid result · app window covered",
                             result.diagnostic,
                             captureGeneration
                         )
@@ -583,7 +613,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 } catch (error: Throwable) {
                     if (!destroyed && monitoringRequested && captureGeneration == maskGeneration.get()) {
                         recordModelFailure(
-                            "Gemma inference failed · app window covered",
+                            "${activeProfileName} inference failed · app window covered",
                             error.message ?: error.javaClass.simpleName,
                             captureGeneration
                         )
@@ -701,9 +731,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                         modelReady = true,
                         opaqueCoverActive = false,
                         message = when {
-                            detectedCount == 0 -> "Monitoring · Gemma returned no media regions"
+                            detectedCount == 0 -> "Monitoring · ${activeProfileName} returned no media regions"
                             redactedCount == 0 -> "Monitoring · detected $detectedCount media region(s); none matched the redaction policy"
-                            else -> "Monitoring · redacted $redactedCount of $detectedCount media region(s)"
+                            else -> "Monitoring · ${activeProfileName}: redacted $redactedCount of $detectedCount media region(s)"
                         },
                         regionsDetected = detectedCount,
                         regionsRedacted = redactedCount,
@@ -759,6 +789,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
         val failedDetector = detector
         detector = null
+        loadedProfile = null
         runCatching { failedDetector?.close() }
         modelReady = false
         modelInitializationStarted.set(false)
@@ -767,13 +798,13 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             mainHandler.removeCallbacks(periodicCapture)
             mainHandler.removeCallbacks(debouncedCapture)
             mainHandler.removeCallbacks(retryCapture)
-            coverMasks("Gemma failed repeatedly · screen remains covered. Stop and restart protection to retry.")
+            coverMasks("${activeProfileName} failed repeatedly · screen remains covered. Stop and restart protection to retry.")
             val coveredStatus = ProtectionStatus.state.value
             ProtectionStatus.update(
                 coveredStatus.copy(
                     active = true,
                     modelReady = false,
-                    error = detail ?: coveredStatus.error ?: "Gemma failed repeatedly",
+                    error = detail ?: coveredStatus.error ?: "${activeProfileName} failed repeatedly",
                     message = if (coveredStatus.opaqueCoverActive) {
                         "Model recovery required · opaque screen cover retained"
                     } else {
@@ -870,6 +901,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             inferenceExecutor.execute {
                 runCatching { detector?.close() }
                 detector = null
+                loadedProfile = null
             }
         }
         inferenceExecutor.shutdown()

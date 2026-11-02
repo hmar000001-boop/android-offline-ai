@@ -53,9 +53,10 @@ import dev.screenveil.app.capture.ProtectionStatus
 import dev.screenveil.app.capture.ScreenProtectionAccessibilityService
 import dev.screenveil.app.model.GemmaModelCatalog
 import dev.screenveil.app.model.ModelInstaller
+import dev.screenveil.app.model.ModelProfile
+import dev.screenveil.app.model.SpecializedModelCatalog
 import dev.screenveil.app.policy.RedactionEffect
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var accessibilityEnabled by mutableStateOf(false)
@@ -94,8 +95,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun beginProtection() {
-        if (!ModelInstaller.isVerifiedInstalled(this)) {
-            Toast.makeText(this, "Download and verify Gemma 4 before starting protection.", Toast.LENGTH_LONG).show()
+        val profile = AppPreferences(this).getModelProfile()
+        if (!ModelInstaller.isProfileInstalled(this, profile)) {
+            val missing = profile.requiredModels.filterNot { ModelInstaller.isVerifiedInstalled(this, it) }
+                .joinToString { it.displayName }
+            Toast.makeText(this, "Download and verify the selected profile models: $missing", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -122,7 +126,7 @@ class MainActivity : ComponentActivity() {
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = false,
-                modelReady = ModelInstaller.isVerifiedInstalled(this),
+                modelReady = ModelInstaller.isProfileInstalled(this, AppPreferences(this).getModelProfile()),
                 message = "Protection paused · Accessibility remains enabled"
             )
         )
@@ -155,7 +159,14 @@ private fun ScreenVeilHome(
     val protection by ProtectionStatus.state.collectAsState()
     val protectionHealthy = protection.active && protection.modelReady &&
         protection.error == null && !protection.opaqueCoverActive
-    var modelInstalled by remember { mutableStateOf(ModelInstaller.isVerifiedInstalled(context)) }
+    var selectedProfile by remember { mutableStateOf(preferences.getModelProfile()) }
+    var installedModelIds by remember {
+        mutableStateOf(
+            SpecializedModelCatalog.all
+                .filter { ModelInstaller.isVerifiedInstalled(context, it) }.map { it.id }.toSet()
+        )
+    }
+    val activeProfileInstalled = selectedProfile.requiredModels.all { it.id in installedModelIds }
     var downloadRunning by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableFloatStateOf(0f) }
     var downloadLabel by remember { mutableStateOf("") }
@@ -195,7 +206,7 @@ private fun ScreenVeilHome(
                         when {
                             !protection.active -> "Protection is paused"
                             protection.opaqueCoverActive -> "App temporarily covered · safe fallback active"
-                            !protection.modelReady -> "Protection not ready · Gemma is loading/unavailable"
+                            !protection.modelReady -> "Protection not ready · selected model profile is loading/unavailable"
                             else -> "Protection active"
                         },
                         fontWeight = FontWeight.SemiBold
@@ -211,7 +222,7 @@ private fun ScreenVeilHome(
                 }
                 if (protection.lastInferenceMs != null) {
                     Text(
-                        "Gemma inference: ${protection.lastInferenceMs} ms · capture-to-overlay: ${protection.lastEndToEndMs ?: "—"} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
+                        "AI inference: ${protection.lastInferenceMs} ms · capture-to-overlay: ${protection.lastEndToEndMs ?: "—"} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -221,7 +232,7 @@ private fun ScreenVeilHome(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = onStart,
-                        enabled = !protection.active && modelInstalled && !downloadRunning,
+                        enabled = !protection.active && activeProfileInstalled && !downloadRunning,
                         modifier = Modifier.weight(1f)
                     ) { Text(if (accessibilityEnabled) "Start protection" else "Enable protection") }
                     OutlinedButton(
@@ -255,16 +266,52 @@ private fun ScreenVeilHome(
             }
         }
 
-        SectionTitle("On-device AI model")
+        SectionTitle("AI model profile")
         Card {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(GemmaModelCatalog.selected.displayName, fontWeight = FontWeight.SemiBold)
-                Text("Google LiteRT Community · Apache-2.0 · multimodal image input", style = MaterialTheme.typography.bodySmall)
-                Text("Approx. 2.6 GB. The model is stored in private app storage and is never bundled in the APK.", style = MaterialTheme.typography.bodyMedium)
-                Text("Source: ${GemmaModelCatalog.selected.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Immutable model revision and SHA-256 checked before loading", style = MaterialTheme.typography.labelSmall, color = Color(0xFF22643C))
-                if (modelInstalled) {
-                    Text("Installed and verified", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Choose the local inference pipeline", fontWeight = FontWeight.SemiBold)
+                ModelProfile.entries.forEach { profile ->
+                    FilterChip(
+                        selected = selectedProfile == profile,
+                        enabled = !protection.active && !downloadRunning,
+                        onClick = {
+                            selectedProfile = profile
+                            preferences.setModelProfile(profile)
+                        },
+                        label = { Text(profile.title) }
+                    )
+                    Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Divider()
+                if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
+                    val selectedModels = selectedProfile.requiredModels
+                    Text(
+                        if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) "Balanced ensemble · no Gemma required" else "Fast specialist pipeline · no Gemma required",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text("${selectedModels.size} independently pretrained models, all executed locally after download:", style = MaterialTheme.typography.bodySmall)
+                    selectedModels.forEach { model ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(model.displayName, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                                Text(if (model.id in installedModelIds) "Verified" else "Not installed", color = if (model.id in installedModelIds) Color(0xFF22643C) else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text("${model.runtime} · ${model.license} · ${(model.minimumBytes / 1_000_000)}+ MB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("SHA-256 pinned · ${model.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                } else {
+                    val model = GemmaModelCatalog.selected
+                    Text(model.displayName, fontWeight = FontWeight.SemiBold)
+                    Text("Google LiteRT Community · ${model.license} · approximately 2.6 GB", style = MaterialTheme.typography.bodySmall)
+                    Text("Multimodal general-purpose screenshot analysis. Stored in private app storage; not bundled in the APK.", style = MaterialTheme.typography.bodyMedium)
+                    Text("SHA-256 pinned · ${model.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                val requiredModels = selectedProfile.requiredModels
+                val missingModels = requiredModels.filter { it.id !in installedModelIds }
+                if (activeProfileInstalled) {
+                    Text("All selected profile models are installed and verified.", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
                 } else if (downloadRunning) {
                     CircularProgressIndicator(progress = { downloadProgress })
                     Text(downloadLabel, style = MaterialTheme.typography.bodySmall)
@@ -276,15 +323,19 @@ private fun ScreenVeilHome(
                             downloadError = null
                             scope.launch {
                                 try {
-                                    val file = ModelInstaller.download(context) { downloaded, total ->
-                                        val fraction = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f
-                                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                            downloadProgress = fraction
-                                            downloadLabel = "Downloaded ${downloaded / 1_000_000_000.0} / ${if (total > 0) String.format(Locale.US, "%.2f GB", total / 1_000_000_000.0) else "unknown"}"
+                                    missingModels.forEachIndexed { index, model ->
+                                        downloadLabel = "Downloading ${model.displayName} (${index + 1}/${missingModels.size})"
+                                        ModelInstaller.download(context, model) { downloaded, total ->
+                                            val fraction = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f
+                                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                                downloadProgress = fraction
+                                                downloadLabel = "${model.displayName}: ${downloaded / 1_000_000} / ${if (total > 0) total / 1_000_000 else "?"} MB"
+                                            }
                                         }
                                     }
-                                    modelInstalled = true
-                                    downloadLabel = "Verified and installed: ${file.name}"
+                                    installedModelIds = SpecializedModelCatalog.all
+                                        .filter { ModelInstaller.isVerifiedInstalled(context, it) }.map { it.id }.toSet()
+                                    downloadLabel = "All selected model artifacts passed SHA-256 verification."
                                     if (accessibilityEnabled && preferences.isProtectionEnabled()) {
                                         ScreenProtectionAccessibilityService.requestStart()
                                     }
@@ -298,16 +349,27 @@ private fun ScreenVeilHome(
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Download and verify Gemma 4") }
+                    ) { Text("Download and verify ${missingModels.size} missing model(s)") }
                 }
                 if (downloadError != null) {
                     Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Only Gemma 4 is approved and selectable in this build. ScreenParser, NSFWJS, Electblake and NudeNet remain research candidates until their Android adapters, exact model files, licenses and device performance are verified. No model is trained or fine-tuned. Gemma downloads only after you press the button; inference runs offline after installation.",
+                    "Model downloads are user-initiated and SHA-256 checked against immutable catalog entries. No model is trained or fine-tuned. All inference is on-device and offline after installation. The Balanced profile downloads about 142 MB of specialist weights; Gemma is a separate ~2.6 GB option.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
+                    Text(
+                        if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
+                            "Scope limitation: the ensemble combines two general NSFW classifiers, a person detector and a five-class clothing classifier. The ViT scans nine overlapping screen tiles only when no person is detected. It cannot guarantee detection of every swimsuit, every image/video frame or every suggestive scene. Thresholds are conservative initial heuristics, not Galaxy S24 FE benchmark results. Uncertain person crops are redacted by default."
+                        } else {
+                            "Scope limitation: the fast profile uses person detections, a five-class clothing classifier and Yahoo OpenNSFW. It does not scan the whole screen in tiles. It cannot guarantee detection of every swimsuit, every image without a detected person, cartoons, or all suggestive scenes. Uncertain person crops are redacted by default."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
@@ -369,11 +431,11 @@ private fun ScreenVeilHome(
                 Text("• Screenshots are requested through Android AccessibilityService only after you explicitly enable ScreenVeil in Accessibility settings.")
                 Text("• No MediaProjection session, screen-recording dialog, foreground capture notification or Display over other apps permission is used.")
                 Text("• Screen pixels are analyzed locally. No screenshots are uploaded or stored as a gallery; short-lived model input files are kept in private cache and deleted after inference.")
-                Text("• Internet access is used only when you explicitly download Gemma 4.")
+                Text("• Internet access is used only when you explicitly download the models for the selected profile.")
                 Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")
                 Text("• Android rate-limits accessibility screenshots. Capture is event-triggered with periodic refresh, not a 30-FPS video recording. Fast video may be only partially inspected.", color = MaterialTheme.colorScheme.error)
                 Text("• During window changes, scrolling, malformed model output or inference errors, ScreenVeil temporarily covers the active app window with an opaque layer until a valid analysis completes. This is intentionally conservative and can interrupt visibility while still allowing touch input.", color = MaterialTheme.colorScheme.error)
-                Text("• Gemma-generated media boxes are estimates. The model can miss content, classify it incorrectly or produce delayed redaction. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
+                Text("• Every model can miss content or classify it incorrectly. The fast profile does not classify all media types; Gemma may also return incorrect or delayed media boxes. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
                 Text("• Accessibility access is powerful. ScreenVeil uses events only to schedule screenshots and does not read window text, inspect view nodes, tap, or control other apps.", style = MaterialTheme.typography.bodySmall)
             }
         }

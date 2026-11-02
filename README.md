@@ -1,152 +1,81 @@
 # ScreenVeil
 
-ScreenVeil is an experimental Android-wide, fully on-device screen-content redaction app. It uses an explicitly enabled Android `AccessibilityService` to observe window-change events and request screenshots of the active application window. It does **not** use `MediaProjection`, initiate a screen-sharing session, display the Android screen-recording consent dialog, or require `SYSTEM_ALERT_WINDOW`.
+ScreenVeil is an experimental Android-wide screen-content redaction app. It inspects screenshots of the active application window through an explicitly enabled Android `AccessibilityService`, then applies blur, pixelation or an opaque cover to detected regions. It does not use `MediaProjection`, a screen-recording session or `SYSTEM_ALERT_WINDOW`.
 
-The first setup requires the user to enable ScreenVeil once in Android Accessibility settings. Android controls that approval; the application cannot silently enable its own accessibility service. After approval, the enabled service starts protection automatically whenever the saved protection setting is on and the verified model is installed.
+**ScreenVeil is an experimental research build, not a certified safety product.** Its classifiers can miss content or produce false positives. It cannot guarantee frame-by-frame video protection, detection of every swimsuit, or protection of Android secure/DRM windows. Do not use it as the sole child-safety, workplace-safety or other high-assurance control.
 
-**This is an experimental research application, not a certified content-safety product.** Gemma 4 E2B is a general-purpose vision-language model, not a calibrated adult-content classifier or a deterministic object detector. Its classifications and box coordinates can be wrong. Do not rely on ScreenVeil as the sole child-safety, workplace-safety or other high-assurance control.
+## Local model profiles
+
+The default profile is **Balanced multi-model · offline**. It does not use Gemma. It combines four existing pretrained artifacts:
+
+| Model | Purpose | Runtime | Model license / pinned artifact |
+|---|---|---|---|
+| Google EfficientDet-Lite0 | Locate people in the screenshot | MediaPipe Tasks Vision | Apache-2.0; SHA-256 pinned in `SpecializedModelCatalog` |
+| Electblake Clothing Type EfficientNetV2-S | Classify person-centred clothing crops; includes `swim_bikini` and `lingerie` | ONNX Runtime | MIT classifier / Apache-2.0 base; immutable HF revision and SHA-256 pinned |
+| Yahoo OpenNSFW ResNet-50 | Independent general pornographic-content score | ONNX Runtime | Yahoo weights BSD-2-Clause; immutable release and SHA-256 pinned |
+| Marqo-derived ViT-Tiny NSFW | Second independent NSFW score; nine overlapping screen tiles when no person is detected | ONNX Runtime | Apache-2.0 repository; immutable HF revision and SHA-256 pinned |
+
+The combined specialist download is approximately **142 MB** (the exact downloaded bytes are enforced by SHA-256). The inference path is local after download; it does not upload screenshots or send model-inference requests to a server.
+
+Two alternate profiles are available:
+
+- **Fast specialized · offline**: EfficientDet-Lite0 + Electblake clothing classifier + Yahoo OpenNSFW. It omits the ViT and tile scan to reduce model storage and compute.
+- **Gemma 4 vision**: separate optional LiteRT-LM / Gemma 4 E2B multimodal path. Its model is approximately 2.59 GB and is not required by either specialist profile.
+
+No model is trained, fine-tuned, quantized or built from scratch in ScreenVeil. No user-supplied model import is allowed. Downloads are initiated by the user and every artifact is size-checked and SHA-256 verified before use. Details and exclusions are in [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+### Important interpretation limits
+
+- The clothing model has only five labels: `denim_shorts`, `lingerie`, `maid`, `nurse`, `swim_bikini`. It has no general `ordinary clothing` / `other` class. Therefore **none** of `denim_shorts`, `maid` or `nurse` is treated as proof that the person is safe. Those outputs are `uncertain` and are redacted by default.
+- The clothing model's `swim_bikini` class does not establish coverage of one-piece swimsuits, swim trunks, rash guards, every sports swimsuit, or small/occluded people.
+- Yahoo OpenNSFW and the ViT classifier are binary/general NSFW classifiers, not dedicated swimsuit detectors. Their scores are combined conservatively; they do not establish semantic certainty.
+- In the Balanced profile, if EfficientDet returns no person boxes, the ViT inspects up to nine overlapping tiles and masks positive tiles as a whole. This is a fallback, not guaranteed discovery of every image/media item.
+- Thresholds are conservative starting heuristics. They have not been calibrated on a representative ScreenVeil dataset or measured on a Galaxy S24 FE.
 
 ## Product policy
 
-- Inference and redaction are offline after the user installs the model.
-- All detected swimwear is redacted, including ordinary beach and sports swimwear.
-- Suggestive media, sexualized poses, explicit nudity and sexual activity are redacted.
-- Ordinary clothing and media classified as safe are allowed.
-- Uncertain media is redacted by default; this conservative behavior can be disabled in Settings.
-- Redaction is configurable: Gaussian-like blur, pixelation, or opaque cover.
-- Redaction strength and screenshot analysis interval are configurable. The status panel reports both Gemma inference time and capture-to-overlay end-to-end time for device benchmarking.
-
-The policy is deterministic after classification. For example, a region classified as `swimwear` is always redacted; the model cannot override that choice.
+- All detected swimwear is intended to be redacted, including ordinary beach and sports swimwear.
+- Suggestive media, explicit nudity and sexual activity are redacted.
+- Ordinary content is allowed only when the selected model can make a supported decision; uncertain person crops are redacted by default.
+- The redaction policy is deterministic after classification. A model score cannot override the `SWIMWEAR`, `SUGGESTIVE` or `EXPLICIT` redaction decisions.
+- The user can choose blur, pixelation or opaque cover, change intensity and tune the screenshot interval.
 
 ## Platform and capture design
 
-- **Minimum Android version: Android 14 (API 34).** This is required for `AccessibilityService.takeScreenshotOfWindow()`.
-- The service declares `android:canTakeScreenshot="true"` and `android:canRetrieveWindowContent="true"` in its accessibility metadata, and requests `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` so it can obtain an active application window ID and its screen bounds.
-- It uses `takeScreenshotOfWindow(windowId, executor, callback)`. Android documents this API for capturing a window underneath an accessibility overlay without capturing the overlay's pixels.
-- The service reads accessibility event type/package metadata and active window IDs/bounds only. It does **not** query `AccessibilityNodeInfo`, read text/content descriptions, inspect UI labels, click controls, perform gestures, or automate other applications.
-- Redaction uses one `TYPE_ACCESSIBILITY_OVERLAY` window containing a single composed transparent bitmap for every redacted region. The window is non-focusable and non-touchable; no separate draw-over-other-apps permission is requested.
-- The screenshot API may refuse protected/secure windows and may return a screenshot rate-limit error. ScreenVeil does not bypass these restrictions.
+- Minimum Android version: Android 14 (API 34), required by `AccessibilityService.takeScreenshotOfWindow()`.
+- Android requires the user to enable ScreenVeil manually in Accessibility settings.
+- The service uses `takeScreenshotOfWindow(windowId, executor, callback)` and reads accessibility event metadata plus window IDs/bounds. It does not read view nodes, app text, content descriptions, click controls or perform gestures.
+- One `TYPE_ACCESSIBILITY_OVERLAY` window contains all composed redaction regions. It is non-focusable and non-touchable.
+- Android may refuse secure/DRM window captures or rate-limit screenshots. ScreenVeil does not bypass those restrictions.
 
-### What “automatic” means
+## Protection and failure behavior
 
-1. Install ScreenVeil and open it.
-2. Install Gemma 4 using the explicit download button.
-3. Tap **Enable protection**. Android Accessibility settings open.
-4. Find ScreenVeil under Installed apps and manually enable it.
-5. Android binds the service. If protection is still enabled in ScreenVeil's saved preference and the verified model exists, it initializes Gemma and starts inspecting app-window screenshots. No screen-recording dialog is shown.
-6. Use the Stop button in ScreenVeil to pause monitoring. The Android accessibility service remains enabled, but no screenshots are requested while protection is paused.
+1. Window, scroll and content-change events invalidate stale geometry.
+2. The previous detailed overlay is replaced by an opaque cover while a fresh capture is analysed.
+3. A single worker runs the selected inference pipeline; results with an older generation/sequence are discarded.
+4. Invalid outputs, capture errors and inference failures use an opaque fallback when Android allows the overlay to be drawn.
+5. After repeated model errors, expensive inference attempts stop but the fallback cover remains until the user explicitly stops/restarts protection.
+6. The app reports model inference time separately from capture-request-to-overlay-commit time.
 
-The service's enablement is managed by Android. If the user disables it in Android settings, it stops. If Android or the device vendor kills/restarts the service, Android may rebind it; the saved preference is respected on reconnection.
+Opaque fallback reduces exposure during technical failures but cannot protect content that a model incorrectly classifies as safe or fails to locate. The service samples screenshots; it is not a 30-FPS video filter. The default screenshot interval is 1.5 seconds, with a configurable minimum of 0.75 seconds. Content can change between samples and may be briefly visible before the app receives a useful accessibility event and applies the cover.
 
-## Selected model and provenance
+## Build
 
-| Property | Value |
-|---|---|
-| Model | Gemma 4 E2B Instruct, LiteRT-LM build |
-| Repository | `litert-community/gemma-4-E2B-it-litert-lm` |
-| Artifact | `gemma-4-E2B-it.litertlm` |
-| Immutable source commit | `6e5c4f1e395deb959c494953478fa5cec4b8008f` |
-| Repository license | Apache-2.0 (as declared by model repository; verify notices at redistribution time) |
-| Runtime | `com.google.ai.edge.litertlm:litertlm-android:0.18.0` |
-| Exact artifact size | 2,588,147,712 bytes |
-| SHA-256 | `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c` |
-
-The model is **not bundled in the APK**. The user explicitly starts its download. It is stored in private application storage and accepted only when its exact expected size and pinned SHA-256 match. The download URL points to the immutable Hugging Face commit, not the moving `main` branch.
-
-Allow at least **2.9 GB of free internal storage** before downloading. The model itself is about 2.59 GB decimal; extra free space is needed during download and verification.
-
-Only this model is approved and selectable in the current build. The `ScreenContentDetector` interface is the runtime extension point, but additional model profiles are not exposed until their Android adapter, immutable artifact, checksum, provenance and license have been verified. This build intentionally does **not** accept arbitrary model files or unsigned external model packages: a checksum alone proves file integrity, not publisher authenticity. The candidate review is documented in [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
-
-## Gemma structured output
-
-The application does not depend on a prompt-only “please return JSON” instruction. It calls LiteRT-LM 0.18.0 `ResponseFormat.json(schema)` with a constrained schema, disables thinking, and disables speculative decoding before the engine is created and in the conversation configuration. The latter avoids a reported Gemma 4 E2B constrained-decoding defect involving speculative/MTP decoding in LiteRT-LM. The model response is still parsed and validated in Kotlin; malformed output is an error, never a safe/empty decision.
-
-See [`docs/GEMMA_STRUCTURED_OUTPUT.md`](docs/GEMMA_STRUCTURED_OUTPUT.md).
-
-## Processing pipeline
-
-1. Accessibility window-change, scroll and content-change events schedule a debounced capture request. A periodic refresh is also used while protection is active.
-2. ScreenVeil selects the active `TYPE_APPLICATION` accessibility window and copies its ID and bounds. It does not read the window's view hierarchy.
-3. `takeScreenshotOfWindow()` returns a `HardwareBuffer`. ScreenVeil copies the pixels to a CPU bitmap and closes the buffer in all callback paths.
-4. A single worker sends a downscaled screenshot to Gemma 4 and requests media rectangles normalized to 0–1000, media type and one decision: `allow`, `swimwear`, `suggestive`, `explicit`, or `uncertain`.
-5. The Kotlin parser validates the JSON structure, exact fields, category, media type, coordinate types/ranges, rectangle ordering and minimum dimensions.
-6. The deterministic policy chooses which returned regions need redaction.
-7. The redaction worker crops each selected region, applies the configured effect and composites every patch into one transparent bitmap sized to the captured application window. A single accessibility overlay view swaps this bitmap as one update.
-8. On a window switch, scroll, any window-content-change event, invalid model response, capture failure or inference failure, ScreenVeil replaces detailed masks with a one-pixel opaque bitmap stretched over the active app window. It keeps that cover until a valid fresh analysis can replace it. After three consecutive model/structured-output failures, it stops expensive retry inference, leaves the cover in place and requires an explicit stop/restart to retry Gemma initialization. This intentionally trades temporary visibility/usability for privacy; touch events pass through because the overlay is non-touchable.
-9. Every capture carries a screen-generation token and monotonically increasing sequence. Results from an earlier window/scroll/content change are discarded, and an older frame cannot overwrite a newer overlay. While inference is busy, at most one follow-up screenshot is requested; there is no unbounded frame queue. Existing valid redactions may be refreshed from a newer screenshot while inference runs.
-
-Gemma currently performs both media-region discovery and content classification. There is no separate trained screen-layout/object-detection model. This is an important accuracy limitation: a VLM can miss an image, fail to return a tight box, or misclassify a beach photograph. `takeScreenshotOfWindow`, constrained JSON and the opaque error fallback improve the capture/failure path; they do not protect against a syntactically valid but visually incorrect `allow` or empty-regions response. Detection false negatives remain an open release gate.
-
-## Latency, video and Android limitations
-
-This is not a screen recorder and is not a 30-FPS redaction pipeline. Android may reject screenshot calls made too frequently; ScreenVeil conservatively spaces requests with a 750 ms local minimum, retries Android rate-limit failures, and uses event-triggered/debounced captures plus periodic refresh. Gemma inference on a 2.6 GB multimodal model also takes time and can be expensive on memory, battery and thermals. During notified window/scroll/content changes the opaque cover stays visible until a fresh analysis completes. Content that changes without a useful accessibility event can still be visible until the next periodic sample. Fast-moving video is sampled occasionally and cannot be guaranteed frame-by-frame.
-
-Android can refuse capture for `FLAG_SECURE` or other protected content. System surfaces, DRM-protected video, secure banking screens and some application windows may be unavailable. ScreenVeil must not attempt to bypass these restrictions.
-
-The selected API is Android 14+ (`takeScreenshotOfWindow`, API 34). Lower Android releases are not supported by this build. Device-vendor behavior, especially Samsung One UI window IDs, overlay coordinates, background lifecycle and screenshot throttling, must be verified on the target Galaxy S24 FE.
-
-## Build the APK
-
-Requirements:
-
-- JDK 21
-- Android SDK Platform 36
-- Android Build Tools 36.0.0
-- Internet access for first Gradle/dependency resolution
-
-On macOS/Linux:
-
-```bash
-./gradlew clean testDebugUnitTest lintDebug assembleDebug
-```
-
-On Windows:
-
-```bat
-gradlew.bat clean testDebugUnitTest lintDebug assembleDebug
-```
-
-`gradlew` and `gradlew.bat` bootstrap the pinned Gradle 8.14.6 distribution and verify its SHA-256. The repository does not include the binary Gradle Wrapper JAR. GitHub Actions installs the same Gradle version using `gradle/actions/setup-gradle`.
-
-APK output:
-
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
-
-This is a debug-signed APK for controlled device testing, not a Play Store release. No production signing key is included.
-
-## GitHub Actions
-
-`.github/workflows/android.yml` runs on pushes to `main`, pull requests and manual dispatch. It installs Temurin JDK 21, Android SDK 36, Build Tools 36.0.0 and Gradle 8.14.6, then runs:
+Pinned versions are in `settings.gradle.kts` and `app/build.gradle.kts`. CI uses JDK 21, Android SDK Platform 36 / Build Tools 36.0.0 and Gradle 8.14.6. Run:
 
 ```bash
 gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-It uploads the debug APK and test/lint reports as workflow artifacts. It uses read-only repository permissions and requires no secrets for a debug build. This source archive has not been pushed to a GitHub repository or run by GitHub Actions in this delivery. Local Android compilation also requires an installed Android SDK Platform 36 and Build Tools 36.0.0.
+The GitHub Actions workflow builds a debug APK and uploads unit-test / lint reports. The local `gradlew` script bootstraps the pinned distribution and checks its SHA-256; the binary wrapper JAR is not included.
+
+## Verification status
+
+The source archive includes unit tests for parser validation, geometry, moderation policy and conservative clothing-classifier interpretation. Local static/smoke checks are documented in [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md). The Android Gradle build, Android test suite and Galaxy S24 FE performance/accuracy measurements must be run in a networked Android build environment and on the actual device before any production/release claim.
 
 ## Privacy and permissions
 
-- `INTERNET`: used only when the user explicitly downloads the pinned Gemma model. Inference and redaction do not make network requests.
-- The service is declared with `android.permission.BIND_ACCESSIBILITY_SERVICE`, which prevents ordinary third-party apps from binding to it. The user must enable it explicitly in Android settings.
-- `canRetrieveWindowContent=true` is required to obtain interactive application-window IDs and bounds. The code does not call node-tree APIs or read other apps' text/content descriptions; inspect the source to verify this claim.
-- `canTakeScreenshot=true` is required by Android's accessibility screenshot API.
-- No `MediaProjection`, foreground capture service, screen-recording session, `SYSTEM_ALERT_WINDOW`, notification permission or boot receiver is used.
-- Screenshots are processed locally. A temporary JPEG is written to the private app cache for LiteRT-LM input and deleted after inference; stale temporary frame files are removed at next app launch.
-- There is no analytics, ads, account system, remote-command channel or screenshot-upload component. `allowBackup=false` is configured.
-
-Accessibility access is powerful. Review `SECURITY.md` before enabling it. ScreenVeil intentionally uses this capability only for screenshot-based visual moderation.
-
-## Source layout
-
-- `capture/ScreenProtectionAccessibilityService.kt`: event handling, active-window screenshot requests, throttling, worker orchestration and service lifecycle.
-- `model/ScreenModerationDetector.kt`: LiteRT-LM / Gemma integration and constrained-output validation.
-- `model/GemmaModelCatalog.kt` and `ModelInstaller.kt`: one trusted, immutable model artifact with size and SHA-256 checks.
-- `policy/ModerationPolicy.kt`: the user-defined redaction policy.
-- `overlay/BitmapRedactor.kt` and `OverlayController.kt`: bitmap redaction and accessibility overlay placement.
-- `AppPreferences.kt`: local settings.
-
-## Validation status
-
-A successful GitHub build proves only that the Android source compiles and tests pass. It does not prove detection quality, bounding-box accuracy, screenshot frequency, battery suitability, thermal suitability or compatibility with every application. These require a separate device-testing phase on the Galaxy S24 FE with lawfully obtained, properly licensed evaluation images and videos. Follow [`docs/DEVICE_VALIDATION.md`](docs/DEVICE_VALIDATION.md). See [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md) for the checks actually executed for this source delivery and the checks still outstanding.
+- `INTERNET` is used only for explicit model downloads. Inference and redaction are on-device after installation.
+- Model files and temporary frames are stored in private app storage/cache and temporary frames are deleted after inference.
+- The user controls the Accessibility permission and protection start/stop state.
+- No analytics or screenshot-upload endpoint is implemented.

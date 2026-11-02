@@ -23,20 +23,23 @@ import java.io.File
  */
 interface ScreenContentDetector : AutoCloseable {
     val activeBackend: String
-    fun initialize(modelFile: File)
+    fun initialize(modelFiles: ModelFiles)
     fun inspect(bitmap: Bitmap): DetectionResult
     override fun close()
 }
 
 class ScreenModerationDetector(private val context: Context) : ScreenContentDetector {
     private var engine: Engine? = null
+    private var gemmaModelFile: File? = null
     override var activeBackend: String = "Not loaded"
         private set
 
     @OptIn(ExperimentalApi::class)
-    override fun initialize(modelFile: File) {
+    override fun initialize(modelFiles: ModelFiles) {
         check(engine == null) { "Model engine is already initialized" }
+        val modelFile = modelFiles.require(ModelIds.GEMMA)
         require(modelFile.isFile) { "Gemma model file is missing" }
+        gemmaModelFile = modelFile
 
         // Gemma 4 E2B + constrained JSON has an upstream MTP/speculative-decoding defect in
         // LiteRT-LM 0.18.0. Force it off before Engine creation, and again per conversation.
@@ -98,7 +101,7 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                 engine = null
                 val fallback = Engine(
                     EngineConfig(
-                        modelPath = ModelInstaller.modelFile(context).absolutePath,
+                        modelPath = checkNotNull(gemmaModelFile).absolutePath,
                         backend = Backend.CPU(),
                         visionBackend = Backend.CPU(),
                         cacheDir = context.cacheDir.absolutePath
@@ -171,6 +174,7 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
         engine?.close()
         engine = null
         activeBackend = "Not loaded"
+        gemmaModelFile = null
     }
 
     companion object {
