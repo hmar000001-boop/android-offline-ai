@@ -64,7 +64,7 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         try {
             nsfw = env.createSession(nsfwFile.absolutePath, options)
             if (vitNsfwFile != null) vitNsfw = env.createSession(vitNsfwFile.absolutePath, options)
-            person = ObjectDetector.createFromFileAndOptions(context, personFile, personOptions)
+            person = ObjectDetector.createFromFileAndOptions(context, personFile.absolutePath, personOptions)
             ortEnvironment = env
             nsfwSession = nsfw
             vitNsfwSession = vitNsfw

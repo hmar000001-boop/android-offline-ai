@@ -70,3 +70,8 @@ Google's Kaggle-published SSD MobileNet V2 Open Images V4 model documents 600 ou
 - The pure normalization helper and `MaskGeometry` mapping have dedicated regression tests; those tests are included in the Gradle unit-test suite but have not been run with Gradle in this environment.
 - Full Android Kotlin compilation, Gradle unit tests, lint and APK assembly remain unverified for this revision.
 - No actual Google Open Images TFLite artifact is included or downloadable in this revision, and no device inference or model-performance claim is made.
+
+
+## CI follow-up — 2026-11-02
+
+The user's GitHub Actions log reached `:app:compileDebugKotlin` and reported one Kotlin diagnostic: `ObjectDetector.createFromFileAndOptions` expected a `String` model path but received a `File`. Corrected the call to pass `personFile.absolutePath`. This is a source-level correction; the replacement archive still requires a fresh GitHub Actions run for full Gradle, unit-test, lint, and APK verification.
