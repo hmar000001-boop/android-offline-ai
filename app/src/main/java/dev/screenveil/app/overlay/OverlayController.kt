@@ -23,7 +23,7 @@ import dev.screenveil.app.policy.ModerationSettings
  * overlay window on the main thread. This avoids per-region windows being updated at different
  * times or retaining old coordinates when the number/order of detections changes.
  */
-class OverlayController(
+open class OverlayController(
     private val context: Context,
     private val windowType: Int = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
     private val requiresDrawOverlaysPermission: Boolean = false
@@ -41,7 +41,7 @@ class OverlayController(
     private var displayedBitmap: Bitmap? = null
 
     /** CPU-heavy crop/effect work is safe on a worker; this method never touches WindowManager. */
-    fun prepare(
+    open fun prepare(
         frame: Bitmap,
         regions: List<DetectedMediaRegion>,
         settings: ModerationSettings,
@@ -134,7 +134,7 @@ class OverlayController(
     }
 
     /** Must be called on the main thread. `prepared` transfers bitmap ownership on success. */
-    fun showPrepared(prepared: PreparedOverlay?): Boolean {
+    open fun showPrepared(prepared: PreparedOverlay?): Boolean {
         if (prepared == null) {
             clear()
             return true
@@ -205,7 +205,7 @@ class OverlayController(
         title = "ScreenVeil redaction"
     }
 
-    fun clear() {
+    open fun clear() {
         val view = imageView
         imageView = null
         val oldBitmap = displayedBitmap
@@ -219,7 +219,7 @@ class OverlayController(
         }
     }
 
-    fun close() = clear()
+    open fun close() = clear()
 
     /** Let the renderer retire its previous frame before releasing the bitmap's native pixels. */
     private fun recycleAfterViewRelease(bitmap: Bitmap?) {

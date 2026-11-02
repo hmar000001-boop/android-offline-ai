@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.screenveil.app.AppPreferences
+import dev.screenveil.app.BuildConfig
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
@@ -110,7 +111,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         connected = true
         destroyed = false
         currentInstance = this
-        overlay = OverlayController(
+        overlay = if (BuildConfig.DEBUG) {
+            ScreenVeilTestHooks.overlayFactory?.invoke(this)
+        } else null
+        overlay = overlay ?: OverlayController(
             context = this,
             windowType = android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             requiresDrawOverlaysPermission = false
@@ -219,7 +223,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
         if (!connected || destroyed) return
         val requestedProfile = preferences.getModelProfile()
-        if (!ModelInstaller.hasProfileMarkers(this, requestedProfile)) {
+        val injectedDetectorFactory = if (BuildConfig.DEBUG) ScreenVeilTestHooks.detectorFactory else null
+        if (injectedDetectorFactory == null && !ModelInstaller.hasProfileMarkers(this, requestedProfile)) {
             modelReady = false
             val missing = requestedProfile.requiredModels
                 .filterNot { ModelInstaller.hasVerifiedMarker(this, it) }
@@ -287,18 +292,21 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     runCatching { detector?.close() }
                     detector = null
                     loadedProfile = null
-                    check(profile.selectable && profile.requiredModels.isNotEmpty()) {
-                        "${profile.title} is not available yet. Choose Balanced, Fast or Gemma instead."
-                    }
+                    val injectedFactory = if (BuildConfig.DEBUG) ScreenVeilTestHooks.detectorFactory else null
                     val verifiedFiles = LinkedHashMap<String, java.io.File>()
-                    profile.requiredModels.forEach { model ->
-                        check(ModelInstaller.verifyInstalledBlocking(this, model)) {
-                            "${model.displayName} is missing or failed SHA-256 verification. Reinstall it in Settings."
+                    if (injectedFactory == null) {
+                        check(profile.selectable && profile.requiredModels.isNotEmpty()) {
+                            "${profile.title} is not available yet. Choose Balanced, Fast or Gemma instead."
                         }
-                        verifiedFiles[model.id] = ModelInstaller.modelFile(this, model)
+                        profile.requiredModels.forEach { model ->
+                            check(ModelInstaller.verifyInstalledBlocking(this, model)) {
+                                "${model.displayName} is missing or failed SHA-256 verification. Reinstall it in Settings."
+                            }
+                            verifiedFiles[model.id] = ModelInstaller.modelFile(this, model)
+                        }
                     }
                     val files = ModelFiles(verifiedFiles)
-                    val created: ScreenContentDetector = when (profile) {
+                    val created: ScreenContentDetector = injectedFactory?.invoke(this, profile) ?: when (profile) {
                         ModelProfile.GEMMA_VISION -> ScreenModerationDetector(this)
                         ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector(this)
                         ModelProfile.SWIMWEAR_AWARE -> error("Swimwear-aware model has not passed Android artifact approval")
@@ -454,6 +462,43 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
 
         lastScreenshotAt = now
+        val injectedFrameProvider = if (BuildConfig.DEBUG) ScreenVeilTestHooks.frameProvider else null
+        if (injectedFrameProvider != null) {
+            try {
+                screenshotExecutor.execute {
+                    try {
+                        val frame = injectedFrameProvider(Rect(target.screenBounds))
+                        mainHandler.post {
+                            try {
+                                if (monitoringRequested && !destroyed && captureGeneration == maskGeneration.get()) {
+                                    consecutiveCaptureFailures.set(0)
+                                    dispatchFrame(frame, target.screenBounds, captureGeneration, requestSequence, now)
+                                } else if (!frame.isRecycled) {
+                                    frame.recycle()
+                                }
+                            } finally {
+                                finishScreenshotRequest()
+                            }
+                        }
+                    } catch (error: Throwable) {
+                        mainHandler.post {
+                            finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
+                            if (captureGeneration == maskGeneration.get() && !destroyed) {
+                                handleCaptureFailure(
+                                    "Injected screenshot provider failed · retrying without blocking the screen",
+                                    error.message ?: error.javaClass.simpleName,
+                                    captureGeneration
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: RejectedExecutionException) {
+                finishScreenshotRequest()
+                handleCaptureFailure("Screenshot worker is unavailable", "Screenshot executor rejected capture", captureGeneration)
+            }
+            return
+        }
         try {
             takeScreenshotOfWindow(
                 target.windowId,
@@ -929,6 +974,27 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
         /** Reports whether Android has actually bound the service, not merely enabled its setting. */
         fun isServiceConnected(): Boolean = currentInstance?.let { it.connected && !it.destroyed } == true
+
+        /** Debug instrumentation only: routes a synthetic event through the production handler. */
+        internal fun dispatchAccessibilityEventForTest(event: AccessibilityEvent) {
+            if (BuildConfig.DEBUG) currentInstance?.onAccessibilityEvent(event)
+        }
+
+        /** Debug instrumentation only: request a capture without synthesizing a screen-change event. */
+        internal fun requestScreenshotForTest() {
+            if (BuildConfig.DEBUG) {
+                currentInstance?.let { service -> service.mainHandler.post { service.requestScreenshot() } }
+            }
+        }
+
+        /** Debug instrumentation only: exposes runtime state without exposing mutable internals. */
+        internal fun isMonitoringForTest(): Boolean =
+            BuildConfig.DEBUG && currentInstance?.monitoringRequested == true
+
+        /** Debug instrumentation only: invoke Android's interruption callback through the service. */
+        internal fun interruptForTest() {
+            if (BuildConfig.DEBUG) currentInstance?.onInterrupt()
+        }
 
         fun isAccessibilityEnabled(context: Context): Boolean {
             val expected = ComponentName(context, ScreenProtectionAccessibilityService::class.java)

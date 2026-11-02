@@ -79,12 +79,12 @@ The user's GitHub Actions log reached `:app:compileDebugKotlin` and reported one
 
 ## Critical usability/safety hotfix (1.5.1 / versionCode 7)
 
-Source now defaults protection OFF, requires an explicit Start tap after Accessibility is enabled, removes global opaque fallback paths, bounds capture/model retries, pauses and clears overlays after runtime failures, and disables specialist whole-screen scoring. See `CRITICAL_SAFETY_HOTFIX.md`. Per user request, Android emulator/instrumentation tests are deferred until the lifecycle changes are packaged; no Gradle build or device validation is claimed for this source revision.
+Source now defaults protection OFF, requires an explicit Start tap after Accessibility is enabled, removes global opaque fallback paths, bounds capture/model retries, pauses and clears overlays after runtime failures, and disables specialist whole-screen scoring. See `CRITICAL_SAFETY_HOTFIX.md`. At the initial hotfix packaging stage, the emulator suite had not yet run. The suite was subsequently added and expanded as documented below; no successful Android build or emulator result is claimed until GitHub Actions completes.
 
 
-## 1.5.1 emulator lifecycle tests added
+## 1.5.1 emulator lifecycle and protection-path tests expanded
 
-Added Android instrumentation tests for: protection default OFF on clean install; Accessibility service binding without auto-start or overlay; explicit start with no verified model files stopping safely; and idempotent Stop with no remaining ScreenVeil overlay window. GitHub Actions now runs `connectedDebugAndroidTest` on API 34 and API 36 emulator images. These tests have not yet been executed; a successful workflow run is still required.
+Expanded the Android instrumentation suite to 17 tests. In addition to default-OFF, migration, Accessibility binding and missing-model safe-stop, the suite now tests: synthetic detector success through the real service and WindowManager; Android's real `takeScreenshotOfWindow()` API; a 30-event content-change storm; three consecutive model failures with an existing mask; five capture failures with an existing mask; Android screenshot denial for a real `FLAG_SECURE` window; renderer failure; Stop while a mask is visible; Accessibility interruption; service disable/unbind while a mask is visible; localized pixel-level bitmap output; and ALLOW-only output with no overlay. A debug-only injection seam provides deterministic fake detector/frame/renderer behavior; release builds do not consult it. See `EMULATOR_TEST_COVERAGE.md`. The expanded suite is source-complete but has not yet been executed; API 34 and API 36 GitHub Actions results are still required.
 
 
 ## Emulator runner shell correction (2026-11-02)
@@ -104,3 +104,8 @@ the Gradle and `tee` exit statuses, and the workflow prints/uploads `emulator-te
 when the emulator test step fails. The script was syntax-checked and exercised with fake Gradle
 commands returning both 0 and 23; both exit statuses were propagated correctly. Actual Android
 instrumentation execution remains pending.
+
+
+## 1.5.1 expanded protection test suite — 2026-11-02
+
+Added debug-only dependency seams in `ScreenVeilTestHooks.kt` for detector, frame provider and renderer injection. The service uses them only under `BuildConfig.DEBUG`. Added a separate fixture Activity in the androidTest APK, including a `FLAG_SECURE` mode, so instrumentation can capture a window outside ScreenVeil's own package. Added 12 additional instrumentation scenarios, bringing the suite to 17. Static XML/YAML/shell/ZIP checks remain distinct from execution: the new tests have not yet run on Android emulators. The environment used to author this archive has no Android SDK or Gradle distribution available, so a GitHub Actions run is required for Kotlin/Android compilation and test results.
