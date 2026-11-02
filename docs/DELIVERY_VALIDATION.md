@@ -155,3 +155,11 @@ The API 34 run that followed the Accessibility-settings correction compiled both
 ## 2026-11-02 — API 34 fixture foreground diagnostic
 
 See `EMULATOR_FOREGROUND_FIX_2026-11-02.md`. The previous instrumentation helper relied on `mCurrentFocus` inside `dumpsys window windows`, which is not stable on Android 13/14. It now checks ActivityManager launch success and resumed activity records. This is a test-harness correction; API 34/API 36 execution remains pending.
+
+## 2026-11-02 — deterministic debounce and secure-window fixture follow-up
+
+The API 34 run following the foreground-diagnostic correction compiled both APKs and ran all 18 tests. Two failures remained: the injected content-change storm counted three unexpected captures, and the secure fixture precondition could not confirm `FLAG_SECURE` through `UiAutomation.rootInActiveWindow`. Source inspection found that the old idle helper ignored queued main-thread callbacks and the test admitted ambient framework events during its synthetic burst. It also used accessibility-tree text lookup rather than reading the Activity's actual runtime Window flags.
+
+The new revision isolates only the deterministic event test from ambient framework events while routing its injected events through the same service event handler. The idle predicate now includes queued Handler callbacks and pending/coalesced work. The fixture reports its actual runtime window flags and focus state through test-package preferences, which the instrumentation checks after launch. Production screenshot, detection, policy and overlay behavior are unchanged.
+
+See `EMULATOR_DEBOUNCE_AND_SECURE_FIX_2026-11-02.md`. This revision has not yet been built with Gradle or run on an Android emulator in the authoring environment. Do not treat it as passed until GitHub Actions succeeds on API 34 and API 36.

@@ -72,6 +72,9 @@ class ProtectionLifecycleInstrumentedTest {
 
     @After
     fun tearDown() {
+        instrumentation.runOnMainSync {
+            ScreenProtectionAccessibilityService.endIsolatedAccessibilityEventTest()
+        }
         ScreenProtectionAccessibilityService.requestStop()
         await("protection stopped", timeoutMs = 5_000L) { !ScreenProtectionAccessibilityService.isMonitoringForTest() }
         shell("input keyevent KEYCODE_HOME")
@@ -207,11 +210,15 @@ class ProtectionLifecycleInstrumentedTest {
             ProtectionStatus.state.value.lastEndToEndMs != null &&
                 fakeCaptureCount.get() >= 1 && hasRedactionWindow()
         }
-        await("initial capture/inference/render pipeline to become idle", timeoutMs = 5_000L) {
+        instrumentation.runOnMainSync {
+            assertTrue(
+                "Could not enter isolated accessibility-event test mode",
+                ScreenProtectionAccessibilityService.beginIsolatedAccessibilityEventTest()
+            )
+        }
+        await("capture workers and all delayed Handler callbacks to become idle", timeoutMs = 5_000L) {
             ScreenProtectionAccessibilityService.isCapturePipelineIdleForTest()
         }
-
-        ScreenProtectionAccessibilityService.disablePeriodicCaptureForTest()
         val beforeCaptures = fakeCaptureCount.get()
         val beforeInspections = inspections.get()
         instrumentation.runOnMainSync {
@@ -234,6 +241,9 @@ class ProtectionLifecycleInstrumentedTest {
                     ProtectionStatus.state.value.regionsRedacted == 1 &&
                     hasRedactionWindow()
             }
+            await("debounced capture pipeline and Handler queue to become idle", timeoutMs = 8_000L) {
+                ScreenProtectionAccessibilityService.isCapturePipelineIdleForTest()
+            }
         } catch (failure: AssertionError) {
             throw AssertionError(
                 "Debounced capture did not restore a localized mask. " +
@@ -242,10 +252,12 @@ class ProtectionLifecycleInstrumentedTest {
                 failure
             )
         }
-        assertEquals(
-            "A burst of 30 content events should coalesce into exactly one screenshot",
-            beforeCaptures + 1,
-            fakeCaptureCount.get()
+        val captureDelta = fakeCaptureCount.get() - beforeCaptures
+        assertTrue(
+            "A burst of 30 content events should coalesce into exactly one screenshot. " +
+                "captureDelta=$captureDelta; inspectionsDelta=${inspections.get() - beforeInspections}; " +
+                "service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}",
+            captureDelta == 1
         )
     }
 
@@ -311,9 +323,23 @@ class ProtectionLifecycleInstrumentedTest {
     fun androidSecureWindowScreenshotDenialPausesWithoutOverlay() {
         installFakeRuntime(resultDetector(), useSyntheticFrames = false)
         launchFixtureWindow(secure = true)
+        try {
+            await("fixture Activity to report focus and its actual FLAG_SECURE window attribute") {
+                fixtureWindowReport().let { report ->
+                    report.focused && report.secureFlagApplied
+                }
+            }
+        } catch (failure: AssertionError) {
+            throw AssertionError(
+                "Secure fixture runtime report was not confirmed: ${fixtureWindowReport()}; " +
+                    "resumedActivity=${resumedActivityDiagnostics()}",
+                failure
+            )
+        }
+        val secureReport = fixtureWindowReport()
         assertTrue(
-            "The fixture Activity must confirm that its runtime window flags include FLAG_SECURE",
-            secureFixtureFlagIsConfirmedInAccessibilityTree()
+            "The fixture Activity did not report FLAG_SECURE from its runtime Window attributes: $secureReport",
+            secureReport.secureFlagApplied
         )
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
@@ -526,6 +552,10 @@ class ProtectionLifecycleInstrumentedTest {
         // package. Use ActivityManager's wait mode and inspect ActivityTaskManager's resumed
         // Activity instead of parsing WindowManager's private dump format. On Android 13/14,
         // `dumpsys window windows` may list `Window #...` entries without an mCurrentFocus line.
+        instrumentation.context.getSharedPreferences(
+            ScreenVeilFixtureActivity.STATE_PREFERENCES,
+            Context.MODE_PRIVATE
+        ).edit().clear().commit()
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
         val secureExtra = if (secure) " --ez secure true" else ""
         val launchOutput = shell("am start -W -n ${component.flattenToString()}$secureExtra")
@@ -546,7 +576,38 @@ class ProtectionLifecycleInstrumentedTest {
                 failure
             )
         }
+        try {
+            await("fixture Activity creation and window focus callback", timeoutMs = 10_000L) {
+                fixtureWindowReport().let { it.created && it.focused }
+            }
+        } catch (failure: AssertionError) {
+            throw AssertionError(
+                "Fixture Activity launch succeeded but its runtime window report is incomplete: " +
+                    "${fixtureWindowReport()}; resumedActivity=${resumedActivityDiagnostics()}",
+                failure
+            )
+        }
         instrumentation.waitForIdleSync()
+    }
+
+    private data class FixtureWindowReport(
+        val focused: Boolean,
+        val secureFlagApplied: Boolean,
+        val flags: Int,
+        val created: Boolean
+    )
+
+    private fun fixtureWindowReport(): FixtureWindowReport {
+        val prefs = instrumentation.context.getSharedPreferences(
+            ScreenVeilFixtureActivity.STATE_PREFERENCES,
+            Context.MODE_PRIVATE
+        )
+        return FixtureWindowReport(
+            focused = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_WINDOW_FOCUSED, false),
+            secureFlagApplied = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_SECURE_FLAG_APPLIED, false),
+            flags = prefs.getInt(ScreenVeilFixtureActivity.KEY_WINDOW_FLAGS, 0),
+            created = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_ACTIVITY_CREATED, false)
+        )
     }
 
     private fun isFixtureActivityResumed(component: ComponentName): Boolean {
@@ -571,20 +632,6 @@ class ProtectionLifecycleInstrumentedTest {
             .take(20)
             .joinToString("\n")
             .ifBlank { "No top/resumed/focused activity marker in dumpsys activity activities" }
-
-    private fun secureFixtureFlagIsConfirmedInAccessibilityTree(): Boolean {
-        val root = uiAutomation.rootInActiveWindow ?: return false
-        return try {
-            val matches = root.findAccessibilityNodeInfosByText("SCREENVEIL_SECURE_FLAG_CONFIRMED")
-            try {
-                matches.isNotEmpty()
-            } finally {
-                matches.forEach { it.recycle() }
-            }
-        } finally {
-            root.recycle()
-        }
-    }
 
     /**
      * The fixture is launched before Accessibility is enabled. Deliver the equivalent

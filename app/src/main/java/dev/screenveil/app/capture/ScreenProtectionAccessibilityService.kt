@@ -80,7 +80,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private val screenshotSuccesses = AtomicInteger(0)
     private val screenshotFailures = AtomicInteger(0)
     // Main-thread guard: only the first content-change event in a debounce burst clears masks.
-    private var contentChangeBurstPending = false
+    @Volatile private var contentChangeBurstPending = false
+    // Debug instrumentation can isolate an injected event burst from unrelated framework events.
+    private var suppressPlatformAccessibilityEventsForTest = false
 
     // Engine and Conversation APIs are confined to inferenceExecutor.
     private var detector: ScreenContentDetector? = null
@@ -168,6 +170,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (BuildConfig.DEBUG && suppressPlatformAccessibilityEventsForTest) return
+        handleAccessibilityEvent(event)
+    }
+
+    /** Shared production event path; debug tests can feed controlled events through this method. */
+    private fun handleAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || destroyed) return
         val eventPackage = event.packageName?.toString()
         if (!eventPackage.isNullOrBlank()) currentForegroundPackage = eventPackage
@@ -961,6 +969,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         destroyed = true
         connected = false
         monitoringRequested = false
+        suppressPlatformAccessibilityEventsForTest = false
         runCatching { preferences.setProtectionEnabled(false) }
         captureRequestedWhileBusy.set(false)
         captureRequestedAfterScreenshot.set(false)
@@ -1017,9 +1026,31 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         /** Reports whether Android has actually bound the service, not merely enabled its setting. */
         fun isServiceConnected(): Boolean = currentInstance?.let { it.connected && !it.destroyed } == true
 
-        /** Debug instrumentation only: routes a synthetic event through the production handler. */
+        /** Debug instrumentation only: routes a synthetic event through the production event path. */
         internal fun dispatchAccessibilityEventForTest(event: AccessibilityEvent) {
-            if (BuildConfig.DEBUG) currentInstance?.onAccessibilityEvent(event)
+            if (BuildConfig.DEBUG) currentInstance?.handleAccessibilityEvent(event)
+        }
+
+        /**
+         * Debug instrumentation only: create a deterministic event-test window. Must be called
+         * on the main thread after the initial frame has completed. Framework events are ignored
+         * while injected events still use the exact same production handler.
+         */
+        internal fun beginIsolatedAccessibilityEventTest(): Boolean {
+            if (!BuildConfig.DEBUG || Looper.myLooper() != Looper.getMainLooper()) return false
+            val service = currentInstance ?: return false
+            service.suppressPlatformAccessibilityEventsForTest = true
+            service.mainHandler.removeCallbacks(service.periodicCapture)
+            service.mainHandler.removeCallbacks(service.debouncedCapture)
+            service.mainHandler.removeCallbacks(service.retryCapture)
+            service.contentChangeBurstPending = false
+            return true
+        }
+
+        /** Debug instrumentation only: restore normal framework event delivery. */
+        internal fun endIsolatedAccessibilityEventTest() {
+            if (!BuildConfig.DEBUG || Looper.myLooper() != Looper.getMainLooper()) return
+            currentInstance?.suppressPlatformAccessibilityEventsForTest = false
         }
 
         /** Debug instrumentation only: request a capture without synthesizing a screen-change event. */
@@ -1029,21 +1060,18 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             }
         }
 
-        /** Debug instrumentation only: remove scheduled periodic work for deterministic event tests. */
-        internal fun disablePeriodicCaptureForTest() {
-            if (BuildConfig.DEBUG) {
-                currentInstance?.let { service ->
-                    service.mainHandler.post { service.mainHandler.removeCallbacks(service.periodicCapture) }
-                }
-            }
-        }
-
         /** Debug instrumentation only: confirms the previous frame has left every async stage. */
         internal fun isCapturePipelineIdleForTest(): Boolean = BuildConfig.DEBUG &&
             currentInstance?.let { service ->
                 !service.screenshotInFlight.get() &&
                     !service.inferenceInFlight.get() &&
-                    !service.redactionInFlight.get()
+                    !service.redactionInFlight.get() &&
+                    !service.captureRequestedAfterScreenshot.get() &&
+                    !service.captureRequestedWhileBusy.get() &&
+                    !service.contentChangeBurstPending &&
+                    !service.mainHandler.hasCallbacks(service.periodicCapture) &&
+                    !service.mainHandler.hasCallbacks(service.debouncedCapture) &&
+                    !service.mainHandler.hasCallbacks(service.retryCapture)
             } == true
 
         /** Debug instrumentation only: exposes runtime state without exposing mutable internals. */

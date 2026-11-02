@@ -8,6 +8,14 @@ import android.widget.TextView
 
 /** Separate instrumentation-APK window used as a capturable target outside ScreenVeil's package. */
 class ScreenVeilFixtureActivity : Activity() {
+    companion object {
+        const val STATE_PREFERENCES = "screenveil_fixture_runtime_state"
+        const val KEY_ACTIVITY_CREATED = "activity_created"
+        const val KEY_WINDOW_FOCUSED = "window_focused"
+        const val KEY_SECURE_FLAG_APPLIED = "secure_flag_applied"
+        const val KEY_WINDOW_FLAGS = "window_flags"
+    }
+
     lateinit var content: TextView
         private set
 
@@ -40,6 +48,24 @@ class ScreenVeilFixtureActivity : Activity() {
             }
         }
         setContentView(content)
+        publishRuntimeWindowState(windowFocused = false)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        publishRuntimeWindowState(windowFocused = hasFocus)
+    }
+
+    private fun publishRuntimeWindowState(windowFocused: Boolean) {
+        val flags = window.attributes.flags
+        val secureFlagApplied = flags and
+            android.view.WindowManager.LayoutParams.FLAG_SECURE != 0
+        getSharedPreferences(STATE_PREFERENCES, MODE_PRIVATE).edit()
+            .putBoolean(KEY_ACTIVITY_CREATED, true)
+            .putBoolean(KEY_WINDOW_FOCUSED, windowFocused)
+            .putBoolean(KEY_SECURE_FLAG_APPLIED, secureFlagApplied)
+            .putInt(KEY_WINDOW_FLAGS, flags)
+            .commit()
     }
 
     fun emitContentChange(index: Int) {
