@@ -3,7 +3,7 @@ package dev.screenveil.app.fixture
 import android.app.Activity
 import android.graphics.Color
 import android.os.Bundle
-import android.view.View
+import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
 
 /** Separate instrumentation-APK window used as a capturable target outside ScreenVeil's package. */
@@ -35,7 +35,7 @@ class ScreenVeilFixtureActivity : Activity() {
     fun emitContentChange(index: Int) {
         runOnUiThread {
             content.text = "SCREENVEIL TEST FIXTURE\ncontent revision $index"
-            content.sendAccessibilityEvent(View.ACCESSIBILITY_EVENT_TYPE_WINDOW_CONTENT_CHANGED)
+            content.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
         }
     }
 }

@@ -109,3 +109,11 @@ instrumentation execution remains pending.
 ## 1.5.1 expanded protection test suite — 2026-11-02
 
 Added debug-only dependency seams in `ScreenVeilTestHooks.kt` for detector, frame provider and renderer injection. The service uses them only under `BuildConfig.DEBUG`. Added a separate fixture Activity in the androidTest APK, including a `FLAG_SECURE` mode, so instrumentation can capture a window outside ScreenVeil's own package. Added 12 additional instrumentation scenarios, bringing the suite to 17. Static XML/YAML/shell/ZIP checks remain distinct from execution: the new tests have not yet run on Android emulators. The environment used to author this archive has no Android SDK or Gradle distribution available, so a GitHub Actions run is required for Kotlin/Android compilation and test results.
+
+
+## Test fixture API constant correction — 2026-11-02
+
+Both API 34 and API 36 runs compiled the production app but failed while compiling the instrumentation
+source because `View.ACCESSIBILITY_EVENT_TYPE_WINDOW_CONTENT_CHANGED` does not exist. Replaced it with
+`AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED`. The next CI run must confirm test APK compilation
+and execute the instrumentation suite; no pass is claimed for the current run.
