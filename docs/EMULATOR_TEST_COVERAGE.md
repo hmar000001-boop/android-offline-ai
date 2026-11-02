@@ -12,6 +12,7 @@ target. A fixture with `FLAG_SECURE` exercises Android's actual screenshot-denia
 
 | Test | What it exercises |
 |---|---|
+| `accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly` | Component matching accepts both short and fully-qualified Android flattened names and rejects literal shell-quote characters. |
 | `cleanInstallDefaultsProtectionToOff` | Fresh preferences default to OFF. |
 | `previousReleaseOnFlagIsMigratedToOff` | A legacy persisted ON flag is migrated to OFF. |
 | `enablingAccessibilityDoesNotStartProtectionOrCreateOverlay` | Android binds the real AccessibilityService, but binding alone does not start monitoring or add a window. |
@@ -53,4 +54,4 @@ The actual screenshot API test verifies capture plumbing, not the correctness of
 - Continuous video/frame-by-frame protection; ScreenVeil samples screenshots at intervals.
 - Long-duration tests over many hours and real third-party application layouts.
 
-No test result is considered passing until GitHub Actions executes this suite on both API levels and its reports are reviewed.
+No test result is considered passing until GitHub Actions executes this suite on both API levels and its reports are reviewed. The suite currently defines 18 instrumentation tests.

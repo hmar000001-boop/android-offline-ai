@@ -1,5 +1,6 @@
 package dev.screenveil.app.capture
 
+import android.Manifest
 import android.app.UiAutomation
 import android.content.ComponentName
 import android.content.Context
@@ -76,14 +77,25 @@ class ProtectionLifecycleInstrumentedTest {
         shell("input keyevent KEYCODE_HOME")
         restoreSecureSetting(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, originalEnabledServices)
         restoreSecureSetting(Settings.Secure.ACCESSIBILITY_ENABLED, originalAccessibilityEnabled)
-        val component = ComponentName(context, ScreenProtectionAccessibilityService::class.java).flattenToString()
-        val wasPreviouslyEnabled = originalEnabledServices.orEmpty().split(':').any { it.equals(component, true) }
+        val component = ComponentName(context, ScreenProtectionAccessibilityService::class.java)
+        val wasPreviouslyEnabled = originalEnabledServices.orEmpty()
+            .split(':')
+            .any { isSameComponent(it, component) }
         if (!wasPreviouslyEnabled) {
             await("Accessibility service unbind", timeoutMs = 8_000L) {
                 !ScreenProtectionAccessibilityService.isServiceConnected()
             }
         }
         ScreenVeilTestHooks.reset()
+    }
+
+    @Test
+    fun accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly() {
+        val expected = ComponentName(context, ScreenProtectionAccessibilityService::class.java)
+
+        assertTrue(isSameComponent(expected.flattenToString(), expected))
+        assertTrue(isSameComponent(expected.flattenToShortString(), expected))
+        assertFalse(isSameComponent("'${expected.flattenToString()}'", expected))
     }
 
     @Test
@@ -336,14 +348,18 @@ class ProtectionLifecycleInstrumentedTest {
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
         await("active overlay before service disable", timeoutMs = 20_000L) { hasRedactionWindow() }
 
-        val component = ComponentName(context, ScreenProtectionAccessibilityService::class.java).flattenToString()
-        val remaining = shell("settings get secure enabled_accessibility_services").trim()
-            .split(':').filter { it.isNotBlank() && !it.equals(component, ignoreCase = true) }
+        val component = ComponentName(context, ScreenProtectionAccessibilityService::class.java)
+        val configuredServices = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        val remaining = configuredServices.split(':')
+            .filter { it.isNotBlank() && !isSameComponent(it, component) }
         if (remaining.isEmpty()) {
-            shell("settings delete secure enabled_accessibility_services")
-            shell("settings put secure accessibility_enabled 0")
+            putSecureSetting(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, null)
+            putSecureSetting(Settings.Secure.ACCESSIBILITY_ENABLED, "0")
         } else {
-            shell("settings put secure enabled_accessibility_services '${shellQuote(remaining.joinToString(":"))}'")
+            putSecureSetting(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, remaining.joinToString(":"))
         }
 
         await("service unbind and overlay removal", timeoutMs = 10_000L) {
@@ -466,23 +482,33 @@ class ProtectionLifecycleInstrumentedTest {
         val component = ComponentName(
             context,
             ScreenProtectionAccessibilityService::class.java
-        ).flattenToString()
+        )
         val existing = originalEnabledServices.orEmpty()
             .split(':')
-            .filter { it.isNotBlank() && !it.equals(component, ignoreCase = true) }
-        val services = (existing + component).joinToString(":")
-        shell("settings put secure enabled_accessibility_services '${shellQuote(services)}'")
-        shell("settings put secure accessibility_enabled 1")
+            .filter { it.isNotBlank() && !isSameComponent(it, component) }
+        val services = (existing + component.flattenToString()).joinToString(":")
 
-        val configuredServices = shell("settings get secure enabled_accessibility_services")
-            .trim().split(':').filter { it.isNotBlank() }
+        // Write the secure settings through the framework API while adopting only the
+        // shell permission required by this instrumentation test. Do not shell-quote
+        // values: UiAutomation command execution does not interpret shell quoting.
+        putSecureSetting(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, services)
+        putSecureSetting(Settings.Secure.ACCESSIBILITY_ENABLED, "1")
+
+        val rawConfiguredServices = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        val configuredServices = rawConfiguredServices.split(':').filter { it.isNotBlank() }
         assertTrue(
-            "Test setup did not enable the ScreenVeil service component. Configured services: $configuredServices",
-            configuredServices.any { it.equals(component, ignoreCase = true) }
+            "Test setup did not enable the ScreenVeil service component. " +
+                "Expected=${component.flattenToString()}; rawSetting=$rawConfiguredServices; " +
+                "parsedServices=$configuredServices",
+            configuredServices.any { isSameComponent(it, component) }
         )
-        assertTrue(
+        assertEquals(
             "Global Accessibility setting did not become enabled",
-            shell("settings get secure accessibility_enabled").trim() == "1"
+            "1",
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED)
         )
     }
 
@@ -516,11 +542,41 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     private fun restoreSecureSetting(key: String, value: String?) {
-        if (value.isNullOrBlank()) shell("settings delete secure $key")
-        else shell("settings put secure $key '${shellQuote(value)}'")
+        putSecureSetting(key, value?.takeUnless { it.isBlank() })
     }
 
-    private fun shellQuote(value: String): String = value.replace("'", "'\\''")
+    /**
+     * Writes one Secure setting using only the shell permission needed by the test.
+     * Null removes the setting through the `settings delete` command; non-null values
+     * use Settings.Secure directly so punctuation is preserved byte-for-byte.
+     */
+    private fun putSecureSetting(key: String, value: String?) {
+        uiAutomation.adoptShellPermissionIdentity(Manifest.permission.WRITE_SECURE_SETTINGS)
+        try {
+            if (value == null) {
+                shell("settings delete secure $key")
+                assertEquals("Secure setting $key should be absent after deletion", null,
+                    Settings.Secure.getString(context.contentResolver, key))
+            } else {
+                assertTrue(
+                    "Unable to write secure setting $key",
+                    Settings.Secure.putString(context.contentResolver, key, value)
+                )
+                assertEquals(
+                    "Secure setting $key did not round-trip accurately",
+                    value,
+                    Settings.Secure.getString(context.contentResolver, key)
+                )
+            }
+        } finally {
+            uiAutomation.dropShellPermissionIdentity()
+        }
+    }
+
+    private fun isSameComponent(value: String, expected: ComponentName): Boolean {
+        val parsed = ComponentName.unflattenFromString(value.trim()) ?: return false
+        return parsed == expected
+    }
 
     private fun shell(command: String): String {
         val descriptor = uiAutomation.executeShellCommand(command)

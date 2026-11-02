@@ -998,12 +998,13 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
         fun isAccessibilityEnabled(context: Context): Boolean {
             val expected = ComponentName(context, ScreenProtectionAccessibilityService::class.java)
-                .flattenToString()
             val enabled = android.provider.Settings.Secure.getString(
                 context.contentResolver,
                 android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ).orEmpty()
-            return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+            return enabled.split(':').any { entry ->
+                ComponentName.unflattenFromString(entry.trim()) == expected
+            }
         }
     }
 }

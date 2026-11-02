@@ -84,7 +84,7 @@ Source now defaults protection OFF, requires an explicit Start tap after Accessi
 
 ## 1.5.1 emulator lifecycle and protection-path tests expanded
 
-Expanded the Android instrumentation suite to 17 tests. In addition to default-OFF, migration, Accessibility binding and missing-model safe-stop, the suite now tests: synthetic detector success through the real service and WindowManager; Android's real `takeScreenshotOfWindow()` API; a 30-event content-change storm; three consecutive model failures with an existing mask; five capture failures with an existing mask; Android screenshot denial for a real `FLAG_SECURE` window; renderer failure; Stop while a mask is visible; Accessibility interruption; service disable/unbind while a mask is visible; localized pixel-level bitmap output; and ALLOW-only output with no overlay. A debug-only injection seam provides deterministic fake detector/frame/renderer behavior; release builds do not consult it. See `EMULATOR_TEST_COVERAGE.md`. The expanded suite is source-complete but has not yet been executed; API 34 and API 36 GitHub Actions results are still required.
+Expanded the Android instrumentation suite to 18 tests. In addition to default-OFF, migration, Accessibility binding and missing-model safe-stop, the suite now tests: synthetic detector success through the real service and WindowManager; Android's real `takeScreenshotOfWindow()` API; a 30-event content-change storm; three consecutive model failures with an existing mask; five capture failures with an existing mask; Android screenshot denial for a real `FLAG_SECURE` window; renderer failure; Stop while a mask is visible; Accessibility interruption; service disable/unbind while a mask is visible; localized pixel-level bitmap output; and ALLOW-only output with no overlay. A debug-only injection seam provides deterministic fake detector/frame/renderer behavior; release builds do not consult it. See `EMULATOR_TEST_COVERAGE.md`. The expanded suite is source-complete but has not yet been executed; API 34 and API 36 GitHub Actions results are still required.
 
 
 ## Emulator runner shell correction (2026-11-02)
@@ -117,3 +117,32 @@ Both API 34 and API 36 runs compiled the production app but failed while compili
 source because `View.ACCESSIBILITY_EVENT_TYPE_WINDOW_CONTENT_CHANGED` does not exist. Replaced it with
 `AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED`. The next CI run must confirm test APK compilation
 and execute the instrumentation suite; no pass is claimed for the current run.
+
+
+## Accessibility instrumentation settings-write correction — 2026-11-02
+
+The first API 36 execution compiled both APKs and started all 17 tests, but 12 service-dependent tests
+failed in the common `enableScreenVeilAccessibility()` setup assertion. Source inspection found that
+the test built commands such as `settings put secure enabled_accessibility_services 'value'` and passed
+them to `UiAutomation.executeShellCommand()`. AOSP's `UiAutomationConnection` implementation launches
+the command with `Runtime.getRuntime().exec(command)`, not an interactive shell; single quotes are
+therefore not removed as shell syntax and can become part of the stored setting. The same pattern was
+also present in test teardown and the service-disable test.
+
+The instrumentation now writes non-null secure settings through `Settings.Secure.putString()` while
+`UiAutomation` adopts only `WRITE_SECURE_SETTINGS`, then drops that identity in `finally`. Null settings
+are deleted through an unquoted, whitespace-tokenized `settings delete secure <key>` command. Every
+write is read back and checked. Test and production service-component matching now parse each value
+with `ComponentName.unflattenFromString()` rather than relying on one textual flattening format. Added
+a regression test for short/full component forms and quote rejection, bringing the suite to 18 tests.
+
+This is a source correction only. The current environment has no Android SDK installation or
+configured Android emulator, so Kotlin compilation and API 34/API 36 execution of this revision have
+not been performed here. The next CI run must establish whether the test service binds and whether the
+remaining screenshot, inference-seam, overlay and cleanup assertions pass. The prior run did not
+exercise those flows because all service-dependent tests stopped at setup.
+
+Source reference: [AOSP UiAutomationConnection](https://android.googlesource.com/platform/frameworks/base/+/fc2be9c0d2beddfbff420d64c0af3d287327a2ee/core/java/android/app/UiAutomationConnection.java)
+shows `Runtime.getRuntime().exec(command)`. Android's [UiAutomation API](https://developer.android.com/reference/android/app/UiAutomation)
+documents scoped shell-permission adoption; [Settings.Secure](https://developer.android.com/reference/android/provider/Settings.Secure)
+documents secure-setting writes and their normal-app restriction.
