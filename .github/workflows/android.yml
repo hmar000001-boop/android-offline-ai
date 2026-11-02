@@ -44,7 +44,10 @@ jobs:
           gradle-version: '8.14.6'
 
       - name: Verify source and build debug APK
-        run: gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug --stacktrace 2>&1 | tee build-output.log
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -62,5 +65,8 @@ jobs:
           path: |
             app/build/reports/tests/
             app/build/reports/lint-results*
+            build/reports/problems/problems-report.html
+            app/build/reports/problems/problems-report.html
+            build-output.log
           if-no-files-found: ignore
           retention-days: 14

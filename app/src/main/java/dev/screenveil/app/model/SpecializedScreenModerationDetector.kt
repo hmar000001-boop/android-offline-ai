@@ -203,7 +203,7 @@ class SpecializedScreenModerationDetector(
             val inputName = session.inputNames.firstOrNull() ?: error("Clothing ONNX model has no input")
             val outputName = session.outputNames.firstOrNull() ?: error("Clothing ONNX model has no output")
             val scores = session.run(mapOf(inputName to tensor)).use { result ->
-                flattenFloatValues(result.get(outputName).value)
+                flattenFloatValues(result.get(outputName).orElseThrow { IllegalStateException("ONNX output not found: $outputName") }.value)
             }
             require(scores.size == CLOTHING_LABELS.size) {
                 "Unexpected clothing classifier output length: ${scores.size}"
@@ -225,7 +225,7 @@ class SpecializedScreenModerationDetector(
             val inputName = session.inputNames.firstOrNull() ?: error("OpenNSFW ONNX model has no input")
             val outputName = session.outputNames.firstOrNull() ?: error("OpenNSFW ONNX model has no output")
             val scores = session.run(mapOf(inputName to tensor)).use { result ->
-                flattenFloatValues(result.get(outputName).value)
+                flattenFloatValues(result.get(outputName).orElseThrow { IllegalStateException("ONNX output not found: $outputName") }.value)
             }
             require(scores.size == 2) { "Unexpected OpenNSFW output length: ${scores.size}" }
             require(scores.all(Float::isFinite)) { "OpenNSFW returned non-finite scores" }
@@ -243,7 +243,7 @@ class SpecializedScreenModerationDetector(
             val inputName = session.inputNames.firstOrNull() ?: error("ViT NSFW ONNX model has no input")
             val outputName = session.outputNames.firstOrNull() ?: error("ViT NSFW ONNX model has no output")
             val logits = session.run(mapOf(inputName to tensor)).use { result ->
-                flattenFloatValues(result.get(outputName).value)
+                flattenFloatValues(result.get(outputName).orElseThrow { IllegalStateException("ONNX output not found: $outputName") }.value)
             }
             require(logits.size == 2) { "Unexpected ViT NSFW output length: ${logits.size}" }
             require(logits.all(Float::isFinite)) { "ViT NSFW classifier returned non-finite logits" }

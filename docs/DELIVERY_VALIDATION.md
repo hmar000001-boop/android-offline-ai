@@ -50,3 +50,11 @@ The standalone policy harness is not the Gradle JUnit suite. It verifies pure ma
 ## Release classification
 
 This archive is a multi-model experimental source build, **not** a verified Android APK and **not** production-ready protection. Three non-Gemma pretrained models are used in the Fast profile; the default Balanced profile uses four non-Gemma pretrained artifacts (one detector plus three classifiers). Gemma remains optional. Physical Android build and target-device/dataset validation remain mandatory; do not claim complete swimwear detection or guaranteed real-time video redaction.
+
+
+## 2026-11-02 Kotlin compile follow-up
+
+- Corrected three ONNX Runtime output reads: `OrtSession.Result.get(String)` returns `Optional<OnnxValue>`, so the code now unwraps it with `orElseThrow` before accessing the tensor value.
+- Added `--stacktrace`, `tee build-output.log`, and artifact upload for the full Gradle log and Gradle problems report to the Android GitHub Actions workflow.
+- Verified the corrected Optional-unwrapping expression independently with `kotlinc` against a minimal Java stub matching the official ONNX Runtime API signature.
+- Full Android build remains unverified in this environment because the Gradle distribution cannot be downloaded (DNS failure for `services.gradle.org`) and no Android SDK platform is installed.
