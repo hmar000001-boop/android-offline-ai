@@ -73,6 +73,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     @Volatile private var activeRedactions: List<DetectedMediaRegion> = emptyList()
     @Volatile private var activeMediaRegionCount: Int = 0
     @Volatile private var currentForegroundPackage: String? = null
+    @Volatile private var lastScreenshotSkipReason: String = "none"
+    @Volatile private var lastScreenshotTarget: String = "none"
+    @Volatile private var lastScreenshotFailure: String = "none"
+    private val screenshotAttempts = AtomicInteger(0)
+    private val screenshotSuccesses = AtomicInteger(0)
+    private val screenshotFailures = AtomicInteger(0)
     // Main-thread guard: only the first content-change event in a debounce burst clears masks.
     private var contentChangeBurstPending = false
 
@@ -415,7 +421,16 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     }
 
     private fun requestScreenshot() {
-        if (!monitoringRequested || !modelReady || destroyed || currentForegroundPackage == packageName) return
+        if (!monitoringRequested || !modelReady || destroyed) {
+            lastScreenshotSkipReason = "monitoring=$monitoringRequested modelReady=$modelReady destroyed=$destroyed"
+            return
+        }
+        if (currentForegroundPackage == packageName) {
+            lastScreenshotSkipReason = "ScreenVeil itself is the foreground package"
+            return
+        }
+        lastScreenshotSkipReason = "none"
+        screenshotAttempts.incrementAndGet()
         if (!screenshotInFlight.compareAndSet(false, true)) {
             // Coalesce events received while Android is still delivering a screenshot callback.
             // The callback schedules exactly one fresh capture when the current request releases.
@@ -438,6 +453,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         val target = try {
             findScreenshotTarget()
         } catch (error: Throwable) {
+            lastScreenshotTarget = "window enumeration failed: ${error.message ?: error.javaClass.simpleName}"
             finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration != maskGeneration.get() || destroyed) return
             handleCaptureFailure(
@@ -448,6 +464,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (target == null) {
+            lastScreenshotTarget = "no active application window; foregroundPackage=$currentForegroundPackage"
             finishScreenshotRequest()
             ProtectionStatus.update(
                 ProtectionStatus.state.value.copy(
@@ -462,6 +479,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
 
         lastScreenshotAt = now
+        lastScreenshotTarget = "windowId=${target.windowId}, bounds=${target.screenBounds.flattenToString()}, foregroundPackage=$currentForegroundPackage"
         val injectedFrameProvider = if (BuildConfig.DEBUG) ScreenVeilTestHooks.frameProvider else null
         if (injectedFrameProvider != null) {
             try {
@@ -472,6 +490,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             try {
                                 if (monitoringRequested && !destroyed && captureGeneration == maskGeneration.get()) {
                                     consecutiveCaptureFailures.set(0)
+                                    screenshotSuccesses.incrementAndGet()
                                     dispatchFrame(frame, target.screenBounds, captureGeneration, requestSequence, now)
                                 } else if (!frame.isRecycled) {
                                     frame.recycle()
@@ -484,6 +503,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                         mainHandler.post {
                             finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
                             if (captureGeneration == maskGeneration.get() && !destroyed) {
+                                screenshotFailures.incrementAndGet()
+                                lastScreenshotFailure = "injected frame-provider failure: ${error.message ?: error.javaClass.simpleName}"
                                 handleCaptureFailure(
                                     "Injected screenshot provider failed · retrying without blocking the screen",
                                     error.message ?: error.javaClass.simpleName,
@@ -517,6 +538,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                                 hardwareBitmap.recycle()
                             }
                             consecutiveCaptureFailures.set(0)
+                            screenshotSuccesses.incrementAndGet()
                             dispatchFrame(frame, target.screenBounds, captureGeneration, requestSequence, now)
                         } catch (error: Throwable) {
                             if (captureGeneration == maskGeneration.get() && !destroyed) {
@@ -537,8 +559,11 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
 
                     override fun onFailure(errorCode: Int) {
-                        finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
-                        if (captureGeneration != maskGeneration.get() || destroyed) return
+                        if (captureGeneration != maskGeneration.get() || destroyed) {
+                            finishScreenshotRequest()
+                            return
+                        }
+                        screenshotFailures.incrementAndGet()
                         val detail = when (errorCode) {
                             ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> "Android is rate-limiting screenshots; retrying shortly"
                             ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> "This app protects its window with FLAG_SECURE; Android does not allow capture"
@@ -547,6 +572,21 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             ERROR_TAKE_SCREENSHOT_INVALID_WINDOW -> "The active app window changed before it could be captured"
                             else -> "Android screenshot failed (code $errorCode)"
                         }
+                        lastScreenshotFailure = "callback errorCode=$errorCode: $detail"
+                        if (errorCode == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) {
+                            // FLAG_SECURE is an explicit platform protection, not a transient
+                            // capture error. Discard any queued capture before releasing the
+                            // in-flight latch; otherwise a pending event could launch another
+                            // screenshot in the interval before the safety stop reaches main.
+                            captureRequestedAfterScreenshot.set(false)
+                            finishScreenshotRequest()
+                            stopForSafety(
+                                "Protection paused because this app protects its window with FLAG_SECURE. The screen is visible.",
+                                detail
+                            )
+                            return
+                        }
+                        finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
                         if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
                             // Android's rate-limit response does not indicate a changed frame;
                             // keep the last validated overlay and retry after the API's cooldown.
@@ -566,6 +606,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 }
             )
         } catch (error: Throwable) {
+            screenshotFailures.incrementAndGet()
+            lastScreenshotFailure = "request threw ${error.javaClass.simpleName}: ${error.message ?: "no message"}"
             finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration == maskGeneration.get() && !destroyed) {
                 handleCaptureFailure(
@@ -987,9 +1029,42 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             }
         }
 
+        /** Debug instrumentation only: remove scheduled periodic work for deterministic event tests. */
+        internal fun disablePeriodicCaptureForTest() {
+            if (BuildConfig.DEBUG) {
+                currentInstance?.let { service ->
+                    service.mainHandler.post { service.mainHandler.removeCallbacks(service.periodicCapture) }
+                }
+            }
+        }
+
+        /** Debug instrumentation only: confirms the previous frame has left every async stage. */
+        internal fun isCapturePipelineIdleForTest(): Boolean = BuildConfig.DEBUG &&
+            currentInstance?.let { service ->
+                !service.screenshotInFlight.get() &&
+                    !service.inferenceInFlight.get() &&
+                    !service.redactionInFlight.get()
+            } == true
+
         /** Debug instrumentation only: exposes runtime state without exposing mutable internals. */
         internal fun isMonitoringForTest(): Boolean =
             BuildConfig.DEBUG && currentInstance?.monitoringRequested == true
+
+        /** Debug instrumentation only: diagnostics included when a lifecycle assertion times out. */
+        internal fun diagnosticsForTest(): String {
+            if (!BuildConfig.DEBUG) return "debug diagnostics unavailable"
+            val service = currentInstance ?: return "service instance is not connected"
+            return "connected=${service.connected}, monitoring=${service.monitoringRequested}, " +
+                "modelReady=${service.modelReady}, destroyed=${service.destroyed}, " +
+                "foregroundPackage=${service.currentForegroundPackage}, " +
+                "skipReason=${service.lastScreenshotSkipReason}, " +
+                "target=${service.lastScreenshotTarget}, " +
+                "attempts=${service.screenshotAttempts.get()}, successes=${service.screenshotSuccesses.get()}, " +
+                "failures=${service.screenshotFailures.get()}, lastFailure=${service.lastScreenshotFailure}, " +
+                "captureFailures=${service.consecutiveCaptureFailures.get()}, " +
+                "screenshotInFlight=${service.screenshotInFlight.get()}, " +
+                "maskGeneration=${service.maskGeneration.get()}"
+        }
 
         /** Debug instrumentation only: invoke Android's interruption callback through the service. */
         internal fun interruptForTest() {

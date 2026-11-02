@@ -21,13 +21,23 @@ class ScreenVeilFixtureActivity : Activity() {
         }
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
+        val secureFlagApplied = window.attributes.flags and
+            android.view.WindowManager.LayoutParams.FLAG_SECURE != 0
         content = TextView(this).apply {
-            text = "SCREENVEIL TEST FIXTURE\nThis window is deliberately capturable."
+            text = if (secureFlagApplied) {
+                "SCREENVEIL_SECURE_FLAG_CONFIRMED\nAndroid must refuse this window screenshot."
+            } else {
+                "SCREENVEIL TEST FIXTURE\nThis window is deliberately capturable."
+            }
             textSize = 22f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(35, 75, 115))
             gravity = android.view.Gravity.CENTER
-            contentDescription = "screenveil-capture-fixture"
+            contentDescription = if (secureFlagApplied) {
+                "screenveil-secure-flag-confirmed"
+            } else {
+                "screenveil-capture-fixture"
+            }
         }
         setContentView(content)
     }

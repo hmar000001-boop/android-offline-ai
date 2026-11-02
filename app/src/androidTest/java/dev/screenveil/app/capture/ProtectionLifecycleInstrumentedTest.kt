@@ -184,16 +184,36 @@ class ProtectionLifecycleInstrumentedTest {
     @Test
     fun repeatedContentChangeEventsAreDebouncedToOneCapture() {
         configureLongCaptureInterval()
-        installFakeRuntime(resultDetector())
+        val inspections = AtomicInteger(0)
+        val validResult = DetectionResult(
+            regions = listOf(
+                DetectedMediaRegion(
+                    box = NormalizedBox(250, 250, 750, 750),
+                    decision = ContentDecision.EXPLICIT,
+                    mediaType = "image"
+                )
+            ),
+            parseSucceeded = true
+        )
+        installFakeRuntime(FakeDetector {
+            inspections.incrementAndGet()
+            validResult
+        })
         launchFixtureWindow()
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
         await("initial localized inference", timeoutMs = 20_000L) {
-            ProtectionStatus.state.value.lastEndToEndMs != null && fakeCaptureCount.get() >= 1
+            ProtectionStatus.state.value.lastEndToEndMs != null &&
+                fakeCaptureCount.get() >= 1 && hasRedactionWindow()
+        }
+        await("initial capture/inference/render pipeline to become idle", timeoutMs = 5_000L) {
+            ScreenProtectionAccessibilityService.isCapturePipelineIdleForTest()
         }
 
-        val before = fakeCaptureCount.get()
+        ScreenProtectionAccessibilityService.disablePeriodicCaptureForTest()
+        val beforeCaptures = fakeCaptureCount.get()
+        val beforeInspections = inspections.get()
         instrumentation.runOnMainSync {
             repeat(30) {
                 val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
@@ -202,13 +222,31 @@ class ProtectionLifecycleInstrumentedTest {
                 event.recycle()
             }
         }
-        await("one debounced capture after content-change storm", timeoutMs = 5_000L) {
-            fakeCaptureCount.get() >= before + 1
+        await("one debounced screenshot after content-change storm", timeoutMs = 8_000L) {
+            fakeCaptureCount.get() >= beforeCaptures + 1
         }
-        Thread.sleep(350L)
-        assertEquals("A burst of 30 content events should coalesce into one screenshot", before + 1, fakeCaptureCount.get())
-        assertTrue("Content-change storm must not stop protection", ProtectionStatus.state.value.active)
-        assertTrue("Localized mask should be restored after the debounced capture", hasRedactionWindow())
+        // The frame-provider counter advances before inference and overlay preparation. Wait for
+        // the complete pipeline rather than sleeping an arbitrary 350 ms after capture starts.
+        try {
+            await("localized mask restored after debounced inference", timeoutMs = 12_000L) {
+                inspections.get() >= beforeInspections + 1 &&
+                    ProtectionStatus.state.value.active &&
+                    ProtectionStatus.state.value.regionsRedacted == 1 &&
+                    hasRedactionWindow()
+            }
+        } catch (failure: AssertionError) {
+            throw AssertionError(
+                "Debounced capture did not restore a localized mask. " +
+                    "status=${ProtectionStatus.state.value}; captures=${fakeCaptureCount.get()}; " +
+                    "inspections=${inspections.get()}; service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}",
+                failure
+            )
+        }
+        assertEquals(
+            "A burst of 30 content events should coalesce into exactly one screenshot",
+            beforeCaptures + 1,
+            fakeCaptureCount.get()
+        )
     }
 
     @Test
@@ -273,16 +311,32 @@ class ProtectionLifecycleInstrumentedTest {
     fun androidSecureWindowScreenshotDenialPausesWithoutOverlay() {
         installFakeRuntime(resultDetector(), useSyntheticFrames = false)
         launchFixtureWindow(secure = true)
+        assertTrue(
+            "The fixture Activity must confirm that its runtime window flags include FLAG_SECURE",
+            secureFixtureFlagIsConfirmedInAccessibilityTree()
+        )
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
+        signalFixtureWindowAsForeground()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
 
-        await("Android secure-window screenshot failure circuit breaker", timeoutMs = 20_000L) {
-            !ProtectionStatus.state.value.active &&
-                ProtectionStatus.state.value.message.contains("repeated screen-capture errors", ignoreCase = true)
+        try {
+            await("Android FLAG_SECURE screenshot refusal pauses protection", timeoutMs = 20_000L) {
+                !ProtectionStatus.state.value.active &&
+                    ProtectionStatus.state.value.message.contains("FLAG_SECURE", ignoreCase = true)
+            }
+        } catch (failure: AssertionError) {
+            val focus = shell("dumpsys window windows").lineSequence()
+                .firstOrNull { it.contains("mCurrentFocus", ignoreCase = true) }.orEmpty()
+            throw AssertionError(
+                "Secure-window test did not reach Android's secure-window refusal. " +
+                    "status=${ProtectionStatus.state.value}; currentFocus=$focus; " +
+                    "service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}",
+                failure
+            )
         }
         assertTrue(
-            "Android should report the secure-window screenshot restriction",
+            "Android should identify FLAG_SECURE as the screenshot refusal reason",
             ProtectionStatus.state.value.error.orEmpty().contains("FLAG_SECURE", ignoreCase = true)
         )
         assertFalse("A secure window must never cause a ScreenVeil cover", hasRedactionWindow())
@@ -470,11 +524,47 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     private fun launchFixtureWindow(secure: Boolean = false) {
+        // Keep shell launch here: the fixture is packaged in the instrumentation APK, not the
+        // target app process. UiAutomation can start it reliably through ActivityManager.
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
         val secureExtra = if (secure) " --ez secure true" else ""
         shell("am start -n ${component.flattenToString()}$secureExtra")
-        await("test fixture application window", timeoutMs = 10_000L) {
-            shell("dumpsys window windows").contains(fixturePackage)
+        await("test fixture activity in the foreground", timeoutMs = 10_000L) {
+            shell("dumpsys window windows").lineSequence()
+                .firstOrNull { it.contains("mCurrentFocus", ignoreCase = true) }
+                ?.contains(ScreenVeilFixtureActivity::class.java.name) == true
+        }
+        instrumentation.waitForIdleSync()
+    }
+
+    private fun secureFixtureFlagIsConfirmedInAccessibilityTree(): Boolean {
+        val root = uiAutomation.rootInActiveWindow ?: return false
+        return try {
+            val matches = root.findAccessibilityNodeInfosByText("SCREENVEIL_SECURE_FLAG_CONFIRMED")
+            try {
+                matches.isNotEmpty()
+            } finally {
+                matches.forEach { it.recycle() }
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /**
+     * The fixture is launched before Accessibility is enabled. Deliver the equivalent
+     * window-state notification after binding so the service's foreground-package guard is
+     * unambiguously pointed at the external fixture rather than the app that launched tests.
+     */
+    private fun signalFixtureWindowAsForeground() {
+        instrumentation.runOnMainSync {
+            val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+            event.packageName = fixturePackage
+            try {
+                ScreenProtectionAccessibilityService.dispatchAccessibilityEventForTest(event)
+            } finally {
+                event.recycle()
+            }
         }
     }
 
