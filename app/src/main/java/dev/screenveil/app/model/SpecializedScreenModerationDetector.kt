@@ -156,13 +156,16 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
             } finally {
                 crop.recycle()
             }
+            val normalizedBox = DetectionBoxNormalizer.fromPixelBounds(
+                left = bounds.left,
+                top = bounds.top,
+                right = bounds.right,
+                bottom = bounds.bottom,
+                imageWidth = bitmap.width,
+                imageHeight = bitmap.height
+            ) ?: error("Person detector returned an invalid box after clipping to the screenshot")
             regions += DetectedMediaRegion(
-                box = NormalizedBox(
-                    (bounds.left / bitmap.width * 1000f).toInt().coerceIn(0, 1000),
-                    (bounds.top / bitmap.height * 1000f).toInt().coerceIn(0, 1000),
-                    (bounds.right / bitmap.width * 1000f).toInt().coerceIn(0, 1000),
-                    (bounds.bottom / bitmap.height * 1000f).toInt().coerceIn(0, 1000)
-                ),
+                box = normalizedBox,
                 decision = decision,
                 mediaType = "image"
             )

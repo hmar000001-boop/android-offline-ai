@@ -34,4 +34,11 @@ class ModelCatalogPolicyTest {
     @Test fun optionalGemmaProfileDoesNotPullSpecialists() {
         assertEquals(listOf(GemmaModelCatalog.selected), ModelProfile.GEMMA_VISION.requiredModels)
     }
+
+    @Test fun unvalidatedOpenImagesCandidateIsNotInDownloadAllowList() {
+        val models = SpecializedModelCatalog.all
+        assertFalse(models.any { it.displayName.contains("Open Images V4") })
+        assertFalse(ModelProfile.SWIMWEAR_AWARE.selectable)
+        assertTrue(ModelProfile.SWIMWEAR_AWARE.requiredModels.isEmpty())
+    }
 }

@@ -281,6 +281,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     runCatching { detector?.close() }
                     detector = null
                     loadedProfile = null
+                    check(profile.selectable && profile.requiredModels.isNotEmpty()) {
+                        "${profile.title} is not available yet. Choose Balanced, Fast or Gemma instead."
+                    }
                     val verifiedFiles = LinkedHashMap<String, java.io.File>()
                     profile.requiredModels.forEach { model ->
                         check(ModelInstaller.verifyInstalledBlocking(this, model)) {
@@ -292,6 +295,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     val created: ScreenContentDetector = when (profile) {
                         ModelProfile.GEMMA_VISION -> ScreenModerationDetector(this)
                         ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector(this)
+                        ModelProfile.SWIMWEAR_AWARE -> error("Swimwear-aware model has not passed Android artifact approval")
                     }
                     created.initialize(files)
                     if (destroyed) {

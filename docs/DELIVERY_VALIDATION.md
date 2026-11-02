@@ -49,3 +49,24 @@ There is no approved swimwear-specific model in this version. The specialist pip
 ## Release classification
 
 This is an updated experimental source package under the balanced model-approval policy. It is **not** a verified Android APK and **not** production-ready protection. Do not claim that all models are 100% safe, secure, trusted or accurate. The specialist profiles do not use Gemma, but neither provides validated swimwear-specific classification or guaranteed real-time video redaction.
+
+
+## Follow-up — detector-box geometry and pending Swimwear-aware profile
+
+- Preserved Google EfficientDet-Lite0 in both selectable specialist profiles (Balanced and Fast).
+- Added a visible `SWIMWEAR_AWARE` profile entry for Google's SSD MobileNet V2 / Open Images V4 candidate. The entry is intentionally disabled and is not in the fixed download catalog because the reviewed Google checkpoint is a SavedModel, not a pinned Android TFLite artifact. The profile has no required artifact list, is rejected by `ModelProfile.fromStored`, and cannot reach model initialization. No checksum or converted artifact was fabricated.
+- Preserved the separate optional Gemma profile.
+- Fixed the integer-division defect in `SpecializedScreenModerationDetector`: the four person-box coordinates now pass through `DetectionBoxNormalizer.fromPixelBounds`, which converts with floating-point arithmetic, clips to screenshot dimensions and rounds outwards.
+- Added regression tests for fractional/non-square coordinates, clipping, invalid boxes, and the full normalized-box-to-overlay mapping.
+- Bumped Android app metadata to version `1.4.0` / version code `5`.
+
+### Candidate model source and remaining admission work
+
+Google's Kaggle-published SSD MobileNet V2 Open Images V4 model documents 600 output categories, detection boxes/class names/scores, Apache-2.0, and an overall Open Images V4 mAP of 0.34. Those are publisher/model-card details, not a ScreenVeil swimwear recall measurement. The Google checkpoint must still be exported to TFLite without training/fine-tuning, receive the correct label metadata or a tested custom Interpreter adapter, be compared against the SavedModel on fixed fixtures, be hashed after export, and run locally on the Galaxy S24 FE.
+
+### Verification for this follow-up
+
+- Source inspection confirms the old `(int / int) * 1000f` expressions are removed from the person-box conversion path.
+- The pure normalization helper and `MaskGeometry` mapping have dedicated regression tests; those tests are included in the Gradle unit-test suite but have not been run with Gradle in this environment.
+- Full Android Kotlin compilation, Gradle unit tests, lint and APK assembly remain unverified for this revision.
+- No actual Google Open Images TFLite artifact is included or downloadable in this revision, and no device inference or model-performance claim is made.

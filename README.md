@@ -27,14 +27,16 @@ The default **Balanced multi-model · offline** profile uses three pretrained ar
 | Yahoo OpenNSFW ResNet-50 ONNX | General binary NSFW score | ONNX Runtime Android | Original Yahoo weights BSD-2-Clause; third-party ONNX conversion has separate notices | Old general pornographic-content classifier; not a swimwear classifier |
 | ViT-Tiny NSFW 384 ONNX | Independent general NSFW score and tiled fallback | ONNX Runtime Android | Apache-2.0 declared by the ONNX repository; source/conversion evidence documented | Repository-declared license and self-reported evaluation; not independently security-audited |
 
-Two profiles are selectable:
+Two specialist profiles are selectable:
 
 - **Balanced multi-model · offline (default):** EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW. The ViT also scans up to nine overlapping screen tiles if no person is detected. Approximately 60 MB of model artifacts based on catalog bounds.
 - **Fast specialized · offline:** EfficientDet-Lite0 + Yahoo OpenNSFW. Approximately 38 MB. It omits the second classifier and tile fallback.
 
 **Gemma 4 E2B Instruct is an optional, separate profile.** It is a general-purpose vision model with a roughly 2.6 GB download; neither specialist profile depends on it. The official Gemma license is Apache-2.0, while the Android LiteRT-LM packaging is separately pinned and documented.
 
-No currently approved model provides validated swimwear-specific classification. In the specialist pipeline, a person region that is not positively classified as NSFW remains `UNCERTAIN`; the app's default conservative policy redacts uncertain regions. This is not equivalent to correctly recognizing every swimsuit, swim trunk, rash guard or sports swimsuit, and it can over-redact ordinary people. The two NSFW classifiers do not provide a swimwear label. The preferred next candidate is Google MobileNet V2 SSD trained on Open Images V4: the 600-class list includes `Swimwear` and the published checkpoint declares Apache-2.0. It is not selectable yet because the reviewed checkpoint is a SavedModel, not a hash-pinned Android TFLite artifact. The conversion and admission gates are documented in [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
+A fourth profile entry, **Swimwear-aware · Google Open Images**, is now shown as pending but is deliberately disabled. It is intended to use Google's SSD MobileNet V2 trained on Open Images V4, whose 600-class outputs include `Swimwear` and `Person`. Google's published checkpoint declares Apache-2.0, but the reviewed artifact is a SavedModel, not a hash-pinned Android TFLite model. The app will not download or execute an unconverted/unverified model. Conversion, output/label validation, exact SHA-256 pinning and S24 FE testing are required before it can be enabled. The existing EfficientDet-Lite0 profiles are preserved and unchanged except for the coordinate-normalization correction.
+
+Until that candidate passes admission, no currently approved model provides validated swimwear-specific detection. In the specialist pipeline, a person region that is not positively classified as NSFW remains `UNCERTAIN`; the app's default conservative policy redacts uncertain regions. This is not equivalent to correctly recognizing every swimsuit, swim trunk, rash guard or sports swimsuit, and it can over-redact ordinary people. The two NSFW classifiers do not provide a swimwear label. See [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
 
 ## Model download and offline behavior
 
@@ -94,7 +96,7 @@ The GitHub Actions workflow builds a debug APK and uploads unit-test / lint repo
 
 ## Verification status
 
-The source archive includes tests for model-catalog policy, profiles, parser validation, geometry and moderation policy. See [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md) for checks performed in this environment and checks still outstanding. A successful Android Gradle build, Android test suite, model inference on device, and Galaxy S24 FE accuracy/performance measurements are required before any production/release claim.
+The source archive includes tests for model-catalog policy, profiles, parser validation, pixel-to-normalized detector-box conversion, screenshot-to-overlay geometry and moderation policy. See [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md) for checks performed in this environment and checks still outstanding. A successful Android Gradle build, Android test suite, model inference on device, and Galaxy S24 FE accuracy/performance measurements are required before any production/release claim.
 
 ## Privacy and permissions
 

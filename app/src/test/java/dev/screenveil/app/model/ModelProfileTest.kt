@@ -22,6 +22,14 @@ class ModelProfileTest {
         assertFalse(ModelIds.GEMMA in ids)
     }
 
+    @Test fun swimwearAwareProfileIsVisibleButNotSelectableUntilItsTfliteArtifactIsApproved() {
+        val profile = ModelProfile.SWIMWEAR_AWARE
+        assertFalse(profile.selectable)
+        assertTrue(profile.requiredModels.isEmpty())
+        assertTrue(profile.availabilityNotice!!.contains("TFLite"))
+        assertEquals(ModelProfile.BALANCED_SPECIALIZED, ModelProfile.fromStored(profile.name))
+    }
+
     @Test fun gemmaIsAnIndependentOptionalProfile() {
         assertEquals(listOf(ModelIds.GEMMA), ModelProfile.GEMMA_VISION.requiredModels.map { it.id })
     }

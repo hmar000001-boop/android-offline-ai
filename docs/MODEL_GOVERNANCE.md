@@ -28,17 +28,18 @@ The `minimumBytes` and `maximumBytes` values are accepted artifact-size windows,
 
 ## Profiles
 
-| Profile | Required model artifacts | Approximate download | Notes |
+| Profile | Required model artifacts | Approximate download | Availability |
 |---|---|---:|---|
-| Balanced multi-model (default) | EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW | about 60 MB | Three artifacts; no Gemma. ViT tile scan runs only if no person boxes are detected. |
-| Fast specialized | EfficientDet-Lite0 + Yahoo OpenNSFW | about 38 MB | Two artifacts; no Gemma, no second classifier or tile fallback. |
-| Gemma 4 vision | Gemma 4 E2B only | about 2.6 GB | Separate optional profile; it does not install or require specialist models. |
+| Balanced multi-model (default) | EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW | about 60 MB | Selectable; three artifacts; no Gemma. ViT tile scan runs only if no person boxes are detected. |
+| Fast specialized | EfficientDet-Lite0 + Yahoo OpenNSFW | about 38 MB | Selectable; two artifacts; no Gemma, no second classifier or tile fallback. |
+| Swimwear-aware · Google Open Images V4 | Google SSD MobileNet V2 Open Images detector + Yahoo OpenNSFW + ViT-Tiny NSFW (planned) | Not yet pinned | Visible in the profile list but disabled. No candidate model is downloaded, admitted or run before conversion and validation. |
+| Gemma 4 vision | Gemma 4 E2B only | about 2.6 GB | Selectable separate optional profile; it does not install or require specialist models. |
 
 ## Runtime contracts and interpretation
 
 ### EfficientDet-Lite0
 
-The model is loaded using the standalone `org.tensorflow:tensorflow-lite-task-vision:0.4.4` library and `ObjectDetector`. The app allow-lists the `person` label and maps returned pixel-space boxes to the screenshot. The runtime dependency is TensorFlow Lite Task Vision; this app does **not** use the MediaPipe Tasks Android SDK. This is intentional: the MediaPipe Tasks usage-metrics documentation describes API usage/device/inference metrics being sent to Google, while the selected product policy permits network access only for model downloads. The standalone TFLite Task Vision runtime is an Apache-2.0 library; its app usage path is local.
+The model is loaded using the standalone `org.tensorflow:tensorflow-lite-task-vision:0.4.4` library and `ObjectDetector`. The app allow-lists the `person` label and maps returned pixel-space boxes to the screenshot. Pixel-to-normalized conversion is performed by the pure `DetectionBoxNormalizer.fromPixelBounds` helper using floating-point division and outward rounding; regression tests verify both the normalized result and its subsequent mapping into the overlay window. The runtime dependency is TensorFlow Lite Task Vision; this app does **not** use the MediaPipe Tasks Android SDK. This is intentional: the MediaPipe Tasks usage-metrics documentation describes API usage/device/inference metrics being sent to Google, while the selected product policy permits network access only for model downloads. The standalone TFLite Task Vision runtime is an Apache-2.0 library; its app usage path is local.
 
 EfficientDet is a general object detector. It does not identify nudity, sexual content, lingerie or swimwear.
 
@@ -78,7 +79,7 @@ This is the strongest candidate found so far under the balanced license policy:
 - It is not yet admitted to the app: the reviewed Google artifact is distributed as a SavedModel, not as a pinned TFLite Android artifact. Its exact exported TFLite bytes, metadata/class map, input normalization, output tensor contract and device behavior are therefore not yet verified.
 - TensorFlow documents conversion of eligible SSD Detection API models to TFLite for mobile use. The exact OIDv4 checkpoint still needs a reproducible conversion using a compatible TensorFlow Object Detection API version, with no training or fine-tuning. The export must then be tested against the source SavedModel on fixed images, carry the correct `Swimwear` label map/metadata (or use a custom TFLite Interpreter adapter), receive an exact SHA-256 and size bounds, and run successfully on Android.
 
-This model meets the license/provenance screen as a *candidate*, but not the artifact/runtime approval gate. It is the next model to evaluate for swimwear; do not put it in a selectable profile before conversion and validation. Until then, **ScreenVeil has no approved swimwear-specific model**.
+This model meets the license/provenance screen as a *candidate*, but not the artifact/runtime approval gate. A disabled `SWIMWEAR_AWARE` profile entry is now present so the intended profile is visible without implying it can be installed. Its required-model list is intentionally empty, the profile is excluded by `ModelProfile.fromStored`, the UI disables selection, and the service refuses initialization. The candidate is not in `SpecializedModelCatalog.all`, so the downloader cannot fetch it. Do not enable it before conversion and validation. Until then, **ScreenVeil has no approved swimwear-specific model**.
 
 ## Security and approval limitations
 

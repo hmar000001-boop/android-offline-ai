@@ -168,7 +168,8 @@ private fun ScreenVeilHome(
                 .filter { ModelInstaller.hasVerifiedMarker(context, it) }.map { it.id }.toSet()
         )
     }
-    val activeProfileInstalled = selectedProfile.requiredModels.all { it.id in installedModelIds }
+    val activeProfileInstalled = selectedProfile.selectable && selectedProfile.requiredModels.isNotEmpty() &&
+        selectedProfile.requiredModels.all { it.id in installedModelIds }
     LaunchedEffect(protection.error, protection.modelReady, selectedProfile) {
         // The service performs a full SHA-256 re-hash immediately before loading. If it removes
         // a stale/corrupt marker on failure, refresh the UI so the user can download again.
@@ -283,7 +284,7 @@ private fun ScreenVeilHome(
                 ModelProfile.entries.forEach { profile ->
                     FilterChip(
                         selected = selectedProfile == profile,
-                        enabled = !protection.active && !downloadRunning,
+                        enabled = !protection.active && !downloadRunning && profile.selectable,
                         onClick = {
                             selectedProfile = profile
                             preferences.setModelProfile(profile)
@@ -291,6 +292,9 @@ private fun ScreenVeilHome(
                         label = { Text(profile.title) }
                     )
                     Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (profile.availabilityNotice != null) {
+                        Text(profile.availabilityNotice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 Divider()
                 if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
@@ -320,7 +324,9 @@ private fun ScreenVeilHome(
 
                 val requiredModels = selectedProfile.requiredModels
                 val missingModels = requiredModels.filter { it.id !in installedModelIds }
-                if (activeProfileInstalled) {
+                if (!selectedProfile.selectable || requiredModels.isEmpty()) {
+                    Text("This profile cannot be downloaded or started yet. No unverified model artifact will be installed.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                } else if (activeProfileInstalled) {
                     Text("All selected model files have verification markers; full SHA-256 is rechecked before loading.", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
                 } else if (downloadRunning) {
                     CircularProgressIndicator(progress = { downloadProgress })
