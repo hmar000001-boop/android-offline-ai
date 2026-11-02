@@ -14,6 +14,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.screenveil.app.AppPreferences
 import dev.screenveil.app.fixture.ScreenVeilFixtureActivity
+import dev.screenveil.app.fixture.ScreenVeilFixtureStateProvider
 import dev.screenveil.app.model.DetectionResult
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.ModelFiles
@@ -548,14 +549,25 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     private fun launchFixtureWindow(secure: Boolean = false) {
+        assertEquals(
+            "Fixture IPC authority must match the installed instrumentation APK package",
+            fixturePackage,
+            ScreenVeilFixtureStateProvider.AUTHORITY.removeSuffix(".screenveil-fixture-state")
+        )
         // The fixture is packaged in the instrumentation APK, separate from ScreenVeil's target
         // package. Use ActivityManager's wait mode and inspect ActivityTaskManager's resumed
         // Activity instead of parsing WindowManager's private dump format. On Android 13/14,
         // `dumpsys window windows` may list `Window #...` entries without an mCurrentFocus line.
-        instrumentation.context.getSharedPreferences(
-            ScreenVeilFixtureActivity.STATE_PREFERENCES,
-            Context.MODE_PRIVATE
-        ).edit().clear().commit()
+        val resetResponse = instrumentation.context.contentResolver.call(
+            ScreenVeilFixtureStateProvider.CONTENT_URI,
+            ScreenVeilFixtureStateProvider.METHOD_RESET,
+            null,
+            null
+        )
+        assertTrue(
+            "Could not reset the fixture state through its IPC provider",
+            resetResponse?.getBoolean(ScreenVeilFixtureStateProvider.KEY_ACCEPTED, false) == true
+        )
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
         val secureExtra = if (secure) " --ez secure true" else ""
         val launchOutput = shell("am start -W -n ${component.flattenToString()}$secureExtra")
@@ -598,15 +610,17 @@ class ProtectionLifecycleInstrumentedTest {
     )
 
     private fun fixtureWindowReport(): FixtureWindowReport {
-        val prefs = instrumentation.context.getSharedPreferences(
-            ScreenVeilFixtureActivity.STATE_PREFERENCES,
-            Context.MODE_PRIVATE
-        )
+        val state = instrumentation.context.contentResolver.call(
+            ScreenVeilFixtureStateProvider.CONTENT_URI,
+            ScreenVeilFixtureStateProvider.METHOD_READ,
+            null,
+            null
+        ) ?: throw AssertionError("Fixture state ContentProvider returned no state bundle")
         return FixtureWindowReport(
-            focused = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_WINDOW_FOCUSED, false),
-            secureFlagApplied = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_SECURE_FLAG_APPLIED, false),
-            flags = prefs.getInt(ScreenVeilFixtureActivity.KEY_WINDOW_FLAGS, 0),
-            created = prefs.getBoolean(ScreenVeilFixtureActivity.KEY_ACTIVITY_CREATED, false)
+            focused = state.getBoolean(ScreenVeilFixtureActivity.KEY_WINDOW_FOCUSED, false),
+            secureFlagApplied = state.getBoolean(ScreenVeilFixtureActivity.KEY_SECURE_FLAG_APPLIED, false),
+            flags = state.getInt(ScreenVeilFixtureActivity.KEY_WINDOW_FLAGS, 0),
+            created = state.getBoolean(ScreenVeilFixtureActivity.KEY_ACTIVITY_CREATED, false)
         )
     }
 

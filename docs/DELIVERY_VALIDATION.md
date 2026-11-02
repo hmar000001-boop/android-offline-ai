@@ -163,3 +163,8 @@ The API 34 run following the foreground-diagnostic correction compiled both APKs
 The new revision isolates only the deterministic event test from ambient framework events while routing its injected events through the same service event handler. The idle predicate now includes queued Handler callbacks and pending/coalesced work. The fixture reports its actual runtime window flags and focus state through test-package preferences, which the instrumentation checks after launch. Production screenshot, detection, policy and overlay behavior are unchanged.
 
 See `EMULATOR_DEBOUNCE_AND_SECURE_FIX_2026-11-02.md`. This revision has not yet been built with Gradle or run on an Android emulator in the authoring environment. Do not treat it as passed until GitHub Actions succeeds on API 34 and API 36.
+
+
+## 2026-11-02 — fixture runtime-state IPC correction
+
+The Android 14 emulator run confirmed the fixture Activity as `topResumedActivity`, but the test observed an all-default runtime report. The fixture report had been exchanged through SharedPreferences across the instrumentation/target process boundary, which Android does not support. Replaced this channel with a test-only exported ContentProvider and `ContentResolver.call()` IPC, and declared its authority in the target package's `<queries>` list for Android package-visibility compatibility. See `EMULATOR_FIXTURE_STATE_IPC_2026-11-02.md`. This correction is source-reviewed and statically validated only; Gradle compilation and API 34/API 36 execution remain pending. The 19:10 run did not reach debounce or secure-window behavior assertions.

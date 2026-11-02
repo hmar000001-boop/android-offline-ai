@@ -5,5 +5,9 @@
             android:exported="true"
             android:label="ScreenVeil test fixture"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <provider
+            android:name="dev.screenveil.app.fixture.ScreenVeilFixtureStateProvider"
+            android:authorities="dev.screenveil.app.test.screenveil-fixture-state"
+            android:exported="true" />
     </application>
 </manifest>

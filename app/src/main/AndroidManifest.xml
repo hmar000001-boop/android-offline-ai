@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The exported provider exists only in the separately installed instrumentation APK. -->
+    <queries>
+        <provider android:authorities="dev.screenveil.app.test.screenveil-fixture-state" />
+    </queries>
+
     <!-- Used only for user-initiated, checksum-verified model downloads; inference is offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
 

@@ -9,7 +9,6 @@ import android.widget.TextView
 /** Separate instrumentation-APK window used as a capturable target outside ScreenVeil's package. */
 class ScreenVeilFixtureActivity : Activity() {
     companion object {
-        const val STATE_PREFERENCES = "screenveil_fixture_runtime_state"
         const val KEY_ACTIVITY_CREATED = "activity_created"
         const val KEY_WINDOW_FOCUSED = "window_focused"
         const val KEY_SECURE_FLAG_APPLIED = "secure_flag_applied"
@@ -60,12 +59,21 @@ class ScreenVeilFixtureActivity : Activity() {
         val flags = window.attributes.flags
         val secureFlagApplied = flags and
             android.view.WindowManager.LayoutParams.FLAG_SECURE != 0
-        getSharedPreferences(STATE_PREFERENCES, MODE_PRIVATE).edit()
-            .putBoolean(KEY_ACTIVITY_CREATED, true)
-            .putBoolean(KEY_WINDOW_FOCUSED, windowFocused)
-            .putBoolean(KEY_SECURE_FLAG_APPLIED, secureFlagApplied)
-            .putInt(KEY_WINDOW_FLAGS, flags)
-            .commit()
+        // The fixture runs in the instrumentation APK, while the test runner executes
+        // against the target APK. SharedPreferences are not a cross-process IPC mechanism
+        // and can return a stale cached snapshot in the test process. Publish this report
+        // through an explicit ContentProvider call instead.
+        contentResolver.call(
+            ScreenVeilFixtureStateProvider.CONTENT_URI,
+            ScreenVeilFixtureStateProvider.METHOD_PUBLISH,
+            null,
+            Bundle().apply {
+                putBoolean(KEY_ACTIVITY_CREATED, true)
+                putBoolean(KEY_WINDOW_FOCUSED, windowFocused)
+                putBoolean(KEY_SECURE_FLAG_APPLIED, secureFlagApplied)
+                putInt(KEY_WINDOW_FLAGS, flags)
+            }
+        )
     }
 
     fun emitContentChange(index: Int) {
