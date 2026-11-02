@@ -153,6 +153,8 @@ private fun ScreenVeilHome(
     val context = LocalContext.current
     val preferences = remember { AppPreferences(context) }
     val protection by ProtectionStatus.state.collectAsState()
+    val protectionHealthy = protection.active && protection.modelReady &&
+        protection.error == null && !protection.opaqueCoverActive
     var modelInstalled by remember { mutableStateOf(ModelInstaller.isVerifiedInstalled(context)) }
     var downloadRunning by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableFloatStateOf(0f) }
@@ -180,21 +182,36 @@ private fun ScreenVeilHome(
             }
         }
 
-        Card(colors = CardDefaults.cardColors(containerColor = if (protection.active) Color(0xFFE7F4EB) else Color(0xFFE9EEF6))) {
+        Card(colors = CardDefaults.cardColors(containerColor = if (protectionHealthy) Color(0xFFE7F4EB) else Color(0xFFE9EEF6))) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.material3.Icon(
                         imageVector = if (protection.active) Icons.Default.Security else Icons.Default.Lock,
                         contentDescription = null,
-                        tint = if (protection.active) Color(0xFF22643C) else MaterialTheme.colorScheme.primary
+                        tint = if (protectionHealthy) Color(0xFF22643C) else MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(if (protection.active) "Protection active / starting" else "Protection is paused", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        when {
+                            !protection.active -> "Protection is paused"
+                            protection.opaqueCoverActive -> "App temporarily covered · safe fallback active"
+                            !protection.modelReady -> "Protection not ready · Gemma is loading/unavailable"
+                            else -> "Protection active"
+                        },
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
                 Text(protection.message, style = MaterialTheme.typography.bodyMedium)
+                if (protection.active && protection.opaqueCoverActive) {
+                    Text(
+                        "A conservative opaque cover is currently hiding the app window. Open ScreenVeil and pause protection to restore visibility if the cover does not clear.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (protection.lastInferenceMs != null) {
                     Text(
-                        "Last analysis: ${protection.lastInferenceMs} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
+                        "Gemma inference: ${protection.lastInferenceMs} ms · capture-to-overlay: ${protection.lastEndToEndMs ?: "—"} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -287,7 +304,7 @@ private fun ScreenVeilHome(
                     Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Only Gemma 4 is approved in this build. The model is downloaded only after you press the button. Detection runs offline after installation.",
+                    "Only Gemma 4 is approved and selectable in this build. ScreenParser, NSFWJS, Electblake and NudeNet remain research candidates until their Android adapters, exact model files, licenses and device performance are verified. No model is trained or fine-tuned. Gemma downloads only after you press the button; inference runs offline after installation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -355,6 +372,7 @@ private fun ScreenVeilHome(
                 Text("• Internet access is used only when you explicitly download Gemma 4.")
                 Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")
                 Text("• Android rate-limits accessibility screenshots. Capture is event-triggered with periodic refresh, not a 30-FPS video recording. Fast video may be only partially inspected.", color = MaterialTheme.colorScheme.error)
+                Text("• During window changes, scrolling, malformed model output or inference errors, ScreenVeil temporarily covers the active app window with an opaque layer until a valid analysis completes. This is intentionally conservative and can interrupt visibility while still allowing touch input.", color = MaterialTheme.colorScheme.error)
                 Text("• Gemma-generated media boxes are estimates. The model can miss content, classify it incorrectly or produce delayed redaction. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
                 Text("• Accessibility access is powerful. ScreenVeil uses events only to schedule screenshots and does not read window text, inspect view nodes, tap, or control other apps.", style = MaterialTheme.typography.bodySmall)
             }

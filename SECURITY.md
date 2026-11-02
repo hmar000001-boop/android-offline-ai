@@ -1,37 +1,27 @@
 # Security and privacy notes
 
-ScreenVeil is experimental software that processes sensitive on-screen pixels. Treat it as a privileged application and review the source before enabling its Accessibility Service.
+ScreenVeil is experimental software that processes screenshots from the active application window after the user explicitly enables its Android AccessibilityService. It is not a certified safety filter and must not be treated as a high-assurance security boundary.
 
-## Capture permissions and behavior
+## Data handling
 
-- ScreenVeil does not use `MediaProjection`, a screen-recording consent dialog, a foreground capture service, or `SYSTEM_ALERT_WINDOW`.
-- The user must manually enable ScreenVeil under Android Settings → Accessibility. The application cannot grant itself this capability.
-- Android binds the service through `android.permission.BIND_ACCESSIBILITY_SERVICE`.
-- The service declares `canTakeScreenshot=true` and `canRetrieveWindowContent=true`. The latter is needed to retrieve active application-window IDs and their screen bounds for `takeScreenshotOfWindow()`.
-- The implementation reads event type/package metadata, active window IDs and window bounds. It does not call `rootInActiveWindow`, inspect `AccessibilityNodeInfo`, read text/content descriptions, click UI elements or perform gestures.
-- Screenshots are requested from the active application window, not the entire display. The Android API specifically supports excluding accessibility overlays from the captured window. System surfaces outside the target window are not analyzed.
-- Android may reject screenshots of secure/protected windows or rate-limit capture requests. ScreenVeil does not bypass `FLAG_SECURE`, DRM or platform restrictions.
+- Screen screenshots are copied to process memory and are not uploaded by ScreenVeil.
+- The temporary image passed to LiteRT-LM is written under the app's private cache directory and deleted after inference; stale `screenveil-frame-*` files are removed on app startup.
+- The only network operation implemented by the app is the user-initiated download of the pinned Gemma artifact.
+- The downloaded model is accepted only after a SHA-256 check against a hard-coded hash for an immutable upstream revision.
+- Do not add analytics, telemetry, remote inference, arbitrary model downloads or screenshot persistence without a separate privacy review and explicit product decision.
 
-## Local data
+## Accessibility scope
 
-- Screen frames are held in process memory and copied into a private app-cache JPEG only for LiteRT-LM image input. The JPEG is deleted in a `finally` block after inference.
-- On application startup, stale `screenveil-frame-*` / legacy `screen-frame-*` cache files are removed.
-- The model is stored under private `filesDir` storage. It is downloaded only after the user presses the download button, from a pinned repository commit, and is checked against a pinned SHA-256 before loading.
-- No screenshot, model prompt, model output, package list, event stream or usage analytics is uploaded.
-- `INTERNET` is needed only for the explicit model download. The runtime path performs local inference.
-- Android backup is disabled (`allowBackup=false`).
+The service reads event metadata and active-window IDs/bounds solely to schedule/crop screenshot processing. It does not query view nodes, extract text, click controls, perform gestures or automate other apps. Android's secure-window and screenshot restrictions must not be bypassed.
 
-## Model trust
+## Failure behavior
 
-A SHA-256 hash verifies integrity against a known expected digest; it does not independently prove the publisher's identity or the model's semantic safety. ScreenVeil therefore ships with one hard-coded, source-reviewed catalogue entry. Arbitrary model import is not enabled. Additional models must be reviewed for source provenance, exact immutable artifact, license, runtime compatibility and evaluation results before being added.
+For notified window changes, scrolling, any window-content-change event and technical capture/inference/formatting failures, the service attempts to replace detailed masks with an opaque app-window cover and retry. After three consecutive model/structured-output failures it stops repeated expensive inference, retains the cover and requires the user to stop/restart protection to retry. An accessibility interruption retains the cover while the service remains connected; if Android disables or destroys the service, the overlay cannot be guaranteed to survive. If the overlay itself cannot be displayed, the UI reports a critical error; do not represent that state as protected. A syntactically valid but visually incorrect model response, including a missed media region or incorrect `allow`, remains a detection false negative and is not eliminated by this fallback.
 
-## Security limitations
+## Model supply-chain requirements
 
-- ScreenVeil is not a security boundary and can miss or misclassify content.
-- Gemma 4 E2B is not a specialist moderation classifier. Its boxes are generated estimates.
-- The app does not guarantee a redaction before the first visible frame.
-- Protected windows, system surfaces, DRM-backed media and some vendor application windows may not be capturable.
-- Accessibility service availability and screenshot limits depend on Android/device behavior.
-- Model inference can consume significant RAM, CPU/GPU time, battery and thermal headroom.
+Every model added to the allow-list must have a named publisher, immutable revision, exact artifact path, pinned SHA-256, license review, Android runtime adapter, preprocessing/output documentation and a successful device benchmark. A hash proves file identity, not publisher identity or license permission. Never treat a model card or candidate listing as proof that a model is safe and operational.
 
-Do not rely on ScreenVeil as the sole child-safety, workplace-safety, legal-compliance or other high-assurance control.
+## Reporting
+
+For a security or privacy issue, use the repository host's private vulnerability-reporting/advisory mechanism where available. Avoid posting screenshots, personal data or sensitive reproduction material in public issue trackers.

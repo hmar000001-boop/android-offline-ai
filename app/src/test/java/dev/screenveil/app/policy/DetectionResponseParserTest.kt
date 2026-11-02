@@ -55,4 +55,24 @@ class DetectionResponseParserTest {
         val response = """{"regions":[],"comment":"safe"}"""
         assertFalse(DetectionResponseParser.parse(response).parseSucceeded)
     }
+    @Test fun acceptsMoreThanEightVisibleMediaRegions() {
+        val regions = (0 until 12).joinToString(",") { index ->
+            val left = index * 25
+            "{\"box\":[$left,100,${left + 20},200],\"media_type\":\"image\",\"decision\":\"swimwear\"}"
+        }
+        val parsed = DetectionResponseParser.parse("{\"regions\":[$regions]}")
+        assertTrue(parsed.parseSucceeded)
+        assertEquals(12, parsed.regions.size)
+    }
+
+    @Test fun rejectsExcessiveMediaRegionsInsteadOfSilentlyTruncating() {
+        val regions = (0 until 25).joinToString(",") { index ->
+            val left = index * 10
+            "{\"box\":[$left,100,${left + 20},200],\"media_type\":\"image\",\"decision\":\"swimwear\"}"
+        }
+        val parsed = DetectionResponseParser.parse("{\"regions\":[$regions]}")
+        assertFalse(parsed.parseSucceeded)
+        assertTrue(parsed.regions.isEmpty())
+    }
+
 }

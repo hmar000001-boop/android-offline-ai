@@ -11,10 +11,12 @@ object ProtectionStatus {
     data class State(
         val active: Boolean = false,
         val modelReady: Boolean = false,
+        val opaqueCoverActive: Boolean = false,
         val message: String = "Protection is stopped",
         val regionsDetected: Int = 0,
         val regionsRedacted: Int = 0,
         val lastInferenceMs: Long? = null,
+        val lastEndToEndMs: Long? = null,
         val error: String? = null
     )
 

@@ -176,7 +176,7 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
     companion object {
         private const val MAX_IMAGE_SIDE = 1280
         private const val JPEG_QUALITY = 88
-        private const val MAX_OUTPUT_TOKENS = 320
+        private const val MAX_OUTPUT_TOKENS = 1_024
 
         /**
          * Deliberately uses a compact JSON Schema supported by LiteRT-LM 0.18.0's
@@ -214,8 +214,11 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
 
             For every media item, return the tight rectangle containing the visible image/video
             pixels. If the item is displayed full-screen, use a box close to [0,0,1000,1000]. If
-            several media items are visible, return a separate rectangle for each. Do not omit an
-            image just because it is the only image on screen or because viewer controls cover part
+            several media items are visible, return a separate rectangle for each, up to 24 items.
+            Never silently omit visible media to fit the limit. If the screen contains more than 24
+            distinct media items, return the full list; strict response validation must reject it
+            so the app keeps the screen covered instead of treating an incomplete list as safe. Do not omit
+            an image just because it is the only image on screen or because viewer controls cover part
             of it.
 
             Classify each media item with exactly one decision:
@@ -254,7 +257,7 @@ data class DetectionResult(
 
 /** Strict parser for the schema-constrained LiteRT-LM JSON response. */
 object DetectionResponseParser {
-    private const val MAX_REGIONS = 8
+    private const val MAX_REGIONS = 24
     private val ROOT_KEYS = setOf("regions")
     private val REGION_KEYS = setOf("box", "media_type", "decision")
 

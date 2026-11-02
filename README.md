@@ -14,7 +14,7 @@ The first setup requires the user to enable ScreenVeil once in Android Accessibi
 - Ordinary clothing and media classified as safe are allowed.
 - Uncertain media is redacted by default; this conservative behavior can be disabled in Settings.
 - Redaction is configurable: Gaussian-like blur, pixelation, or opaque cover.
-- Redaction strength and screenshot analysis interval are configurable.
+- Redaction strength and screenshot analysis interval are configurable. The status panel reports both Gemma inference time and capture-to-overlay end-to-end time for device benchmarking.
 
 The policy is deterministic after classification. For example, a region classified as `swimwear` is always redacted; the model cannot override that choice.
 
@@ -24,7 +24,7 @@ The policy is deterministic after classification. For example, a region classifi
 - The service declares `android:canTakeScreenshot="true"` and `android:canRetrieveWindowContent="true"` in its accessibility metadata, and requests `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` so it can obtain an active application window ID and its screen bounds.
 - It uses `takeScreenshotOfWindow(windowId, executor, callback)`. Android documents this API for capturing a window underneath an accessibility overlay without capturing the overlay's pixels.
 - The service reads accessibility event type/package metadata and active window IDs/bounds only. It does **not** query `AccessibilityNodeInfo`, read text/content descriptions, inspect UI labels, click controls, perform gestures, or automate other applications.
-- Redaction uses region-sized `TYPE_ACCESSIBILITY_OVERLAY` windows. No separate draw-over-other-apps permission is requested.
+- Redaction uses one `TYPE_ACCESSIBILITY_OVERLAY` window containing a single composed transparent bitmap for every redacted region. The window is non-focusable and non-touchable; no separate draw-over-other-apps permission is requested.
 - The screenshot API may refuse protected/secure windows and may return a screenshot rate-limit error. ScreenVeil does not bypass these restrictions.
 
 ### What “automatic” means
@@ -55,7 +55,7 @@ The model is **not bundled in the APK**. The user explicitly starts its download
 
 Allow at least **2.9 GB of free internal storage** before downloading. The model itself is about 2.59 GB decimal; extra free space is needed during download and verification.
 
-Only this model is approved in the current build. Model runtime integration is behind `ScreenContentDetector`, and model metadata is isolated in `GemmaModelCatalog`, so another model adapter/catalog entry can be added later. This build intentionally does **not** accept arbitrary model files or unsigned external model packages: a checksum alone proves file integrity, not publisher authenticity. New selectable models must first have their source, signed/pinned artifact, license and LiteRT compatibility audited and then be added to the trusted catalogue.
+Only this model is approved and selectable in the current build. The `ScreenContentDetector` interface is the runtime extension point, but additional model profiles are not exposed until their Android adapter, immutable artifact, checksum, provenance and license have been verified. This build intentionally does **not** accept arbitrary model files or unsigned external model packages: a checksum alone proves file integrity, not publisher authenticity. The candidate review is documented in [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
 
 ## Gemma structured output
 
@@ -71,14 +71,15 @@ See [`docs/GEMMA_STRUCTURED_OUTPUT.md`](docs/GEMMA_STRUCTURED_OUTPUT.md).
 4. A single worker sends a downscaled screenshot to Gemma 4 and requests media rectangles normalized to 0–1000, media type and one decision: `allow`, `swimwear`, `suggestive`, `explicit`, or `uncertain`.
 5. The Kotlin parser validates the JSON structure, exact fields, category, media type, coordinate types/ranges, rectangle ordering and minimum dimensions.
 6. The deterministic policy chooses which returned regions need redaction.
-7. The redaction worker crops each selected region, applies the configured effect and hands the prepared bitmap to the main thread. The overlay uses the captured application's window bounds to map crop coordinates to display coordinates.
-8. If inference is still running when a newer frame arrives, the app may refresh an already-detected redaction patch using the newer screenshot. It does not reclassify every frame, and stale regions are cleared on window/scroll changes.
+7. The redaction worker crops each selected region, applies the configured effect and composites every patch into one transparent bitmap sized to the captured application window. A single accessibility overlay view swaps this bitmap as one update.
+8. On a window switch, scroll, any window-content-change event, invalid model response, capture failure or inference failure, ScreenVeil replaces detailed masks with a one-pixel opaque bitmap stretched over the active app window. It keeps that cover until a valid fresh analysis can replace it. After three consecutive model/structured-output failures, it stops expensive retry inference, leaves the cover in place and requires an explicit stop/restart to retry Gemma initialization. This intentionally trades temporary visibility/usability for privacy; touch events pass through because the overlay is non-touchable.
+9. Every capture carries a screen-generation token and monotonically increasing sequence. Results from an earlier window/scroll/content change are discarded, and an older frame cannot overwrite a newer overlay. While inference is busy, at most one follow-up screenshot is requested; there is no unbounded frame queue. Existing valid redactions may be refreshed from a newer screenshot while inference runs.
 
-Gemma currently performs both media-region discovery and content classification. There is no separate trained screen-layout/object-detection model. This is an important accuracy limitation: a VLM can miss an image, fail to return a tight box, or misclassify a beach photograph. `takeScreenshotOfWindow` and structured JSON fix the capture path and malformed-output problem; they do not guarantee correct moderation.
+Gemma currently performs both media-region discovery and content classification. There is no separate trained screen-layout/object-detection model. This is an important accuracy limitation: a VLM can miss an image, fail to return a tight box, or misclassify a beach photograph. `takeScreenshotOfWindow`, constrained JSON and the opaque error fallback improve the capture/failure path; they do not protect against a syntactically valid but visually incorrect `allow` or empty-regions response. Detection false negatives remain an open release gate.
 
 ## Latency, video and Android limitations
 
-This is not a screen recorder and is not a 30-FPS redaction pipeline. Android may reject screenshot calls made too frequently; ScreenVeil conservatively spaces requests with a 750 ms local minimum, retries Android rate-limit failures, and uses event-triggered/debounced captures plus periodic refresh. Gemma inference on a 2.6 GB multimodal model also takes time and can be expensive on memory, battery and thermals. Fast-moving videos may only be sampled occasionally, and the first frame may be visible before the model returns a redaction.
+This is not a screen recorder and is not a 30-FPS redaction pipeline. Android may reject screenshot calls made too frequently; ScreenVeil conservatively spaces requests with a 750 ms local minimum, retries Android rate-limit failures, and uses event-triggered/debounced captures plus periodic refresh. Gemma inference on a 2.6 GB multimodal model also takes time and can be expensive on memory, battery and thermals. During notified window/scroll/content changes the opaque cover stays visible until a fresh analysis completes. Content that changes without a useful accessibility event can still be visible until the next periodic sample. Fast-moving video is sampled occasionally and cannot be guaranteed frame-by-frame.
 
 Android can refuse capture for `FLAG_SECURE` or other protected content. System surfaces, DRM-protected video, secure banking screens and some application windows may be unavailable. ScreenVeil must not attempt to bypass these restrictions.
 
@@ -123,7 +124,7 @@ This is a debug-signed APK for controlled device testing, not a Play Store relea
 gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-It uploads the debug APK and test/lint reports as workflow artifacts. It uses read-only repository permissions and requires no secrets for a debug build. This source archive has not been pushed to a GitHub repository or run by GitHub Actions in this session.
+It uploads the debug APK and test/lint reports as workflow artifacts. It uses read-only repository permissions and requires no secrets for a debug build. This source archive has not been pushed to a GitHub repository or run by GitHub Actions in this delivery. Local Android compilation also requires an installed Android SDK Platform 36 and Build Tools 36.0.0.
 
 ## Privacy and permissions
 
@@ -148,4 +149,4 @@ Accessibility access is powerful. Review `SECURITY.md` before enabling it. Scree
 
 ## Validation status
 
-A successful GitHub build proves only that the Android source compiles and tests pass. It does not prove detection quality, bounding-box accuracy, screenshot frequency, battery suitability, thermal suitability or compatibility with every application. These require a separate device-testing phase on the Galaxy S24 FE with lawfully obtained, properly licensed evaluation images and videos. Follow [`docs/DEVICE_VALIDATION.md`](docs/DEVICE_VALIDATION.md).
+A successful GitHub build proves only that the Android source compiles and tests pass. It does not prove detection quality, bounding-box accuracy, screenshot frequency, battery suitability, thermal suitability or compatibility with every application. These require a separate device-testing phase on the Galaxy S24 FE with lawfully obtained, properly licensed evaluation images and videos. Follow [`docs/DEVICE_VALIDATION.md`](docs/DEVICE_VALIDATION.md). See [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md) for the checks actually executed for this source delivery and the checks still outstanding.

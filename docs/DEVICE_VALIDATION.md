@@ -19,10 +19,11 @@ This plan is mandatory before treating ScreenVeil as a practical daily-use filte
 2. Test an image in a feed, multiple visible image cards, a browser page, and a video player. Confirm the chosen active application window ID and its bounds match the screenshot buffer.
 3. Compare overlay coordinates to the source pixels at portrait and landscape orientation, with status/navigation bars and edge-to-edge content.
 4. Test split-screen, floating windows, picture-in-picture, popups and dialogs. Confirm ScreenVeil either aligns correctly or reports an unsupported window shape rather than placing a mask at an incorrect location.
-5. Confirm `takeScreenshotOfWindow()` does not include ScreenVeil's own accessibility-overlay masks in subsequent captures.
+5. Confirm `takeScreenshotOfWindow()` does not include ScreenVeil's own accessibility-overlay bitmap in subsequent captures. Confirm all visible redaction regions update together in the single overlay window.
 6. Open a `FLAG_SECURE` screen and DRM-protected video. Confirm Android refuses the screenshot and ScreenVeil does not attempt a workaround.
-7. Rapidly scroll and change applications. Confirm stale masks are cleared before new-window coordinates are applied.
-8. Trigger screenshot rate limiting in a test build. Confirm the status reports throttling and retries do not create an unbounded queue.
+7. Rapidly scroll, replace feed content and change applications while Gemma inference is running. Confirm old-generation results are discarded, older frame sequences cannot overwrite a newer overlay, and an opaque cover replaces stale geometry until new analysis succeeds.
+8. Force malformed JSON, model exceptions, bitmap allocation failures and overlay update failures in a test build. Confirm monitoring is not automatically disabled, the opaque fallback is displayed when possible, and retry scheduling remains bounded. After three consecutive model failures, confirm retries stop, the cover remains, and Stop → Start retries model initialization.
+9. Trigger screenshot rate limiting in a test build. Confirm the status reports throttling and retries do not create an unbounded screenshot or inference queue.
 
 ## Gemma structured-output validation
 
@@ -32,8 +33,9 @@ This plan is mandatory before treating ScreenVeil as a practical daily-use filte
 4. Test a single full-screen beach/swimwear photo in Samsung Gallery. Expected output: one media region classified as `swimwear`; expected behavior: its full media rectangle is redacted.
 5. Repeat with ordinary clothing, non-swimwear beach scenes, sportswear, suggestive poses, explicit content, artworks and ordinary UI screenshots.
 6. Test images within feeds and multiple media regions. Measure box intersection-over-union and decision accuracy against human labels.
-7. Confirm incomplete JSON, malformed boxes, unknown categories, empty text and inference exceptions are shown as errors—not interpreted as safe.
-8. Record invalid/timeout rate over at least 100 varied inputs. A constrained format is not a guarantee of correct visual understanding.
+7. Confirm incomplete JSON, malformed boxes, unknown categories, empty text and inference exceptions cause an opaque fallback—not a safe/empty decision.
+8. Separately test syntactically valid false negatives (missed photo, missed swimsuit, incorrect `allow`, empty region list). These are model-accuracy failures, not parser failures, and must be included in false-negative measurements.
+9. Record invalid/timeout rate over at least 100 varied inputs. A constrained format is not a guarantee of correct visual understanding.
 
 ## Performance and thermal validation
 
@@ -42,7 +44,7 @@ Use lawfully obtained, properly licensed test images/videos and test sustained o
 Measure:
 
 - screenshot success rate and rate-limit failures;
-- median/P95 time from screenshot request to overlay update;
+- median/P95 time from screenshot request to overlay update (the app now displays the latest capture-to-overlay latency separately from Gemma inference time);
 - Gemma model initialization time and peak RAM/PSS/native heap;
 - GPU and CPU fallback latency separately;
 - battery drain and device temperature;
