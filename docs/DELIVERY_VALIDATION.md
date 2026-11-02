@@ -173,3 +173,11 @@ The Android 14 emulator run confirmed the fixture Activity as `topResumedActivit
 
 The API 34 run at 19:27 UTC crashed during test APK process startup with `NoClassDefFoundError: kotlin.jvm.internal.Intrinsics` from `ScreenVeilFixtureStateProvider` static initialization. The instrumentation APK's runtime dependency configuration did not provide a guaranteed Kotlin stdlib to manifest-declared fixture components. `androidTestImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.21")` is now explicit and aligned with the Kotlin plugin version. This is a build/test packaging correction only. Re-run API 34 and API 36 before treating fixture IPC or the lifecycle suite as validated.
 
+
+## 2026-11-02 — Instrumentation Kotlin runtime diagnostic
+
+The API 34 instrumentation process crashed during `ScreenVeilFixtureStateProvider` initialization with `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`. The project already declares Kotlin stdlib in `androidTestImplementation`, so another dependency declaration was not added without evidence.
+
+A diagnostic-only workflow change now captures the `debugAndroidTestRuntimeClasspath` tree and Kotlin stdlib dependency insight; rebuilds the instrumentation APK with `--no-build-cache --rerun-tasks`; inspects its DEX definitions with `apkanalyzer`; copies the APK and reports into an artifact directory; and independently probes the exported fixture ContentProvider on the emulator before running `connectedDebugAndroidTest`.
+
+This revision does not change production application code, fixture Kotlin source, dependency versions, or dependency declarations. See `docs/INSTRUMENTATION_RUNTIME_DIAGNOSTIC_PLAN_2026-11-02.md` for execution instructions and interpretation of the diagnostic outcomes.

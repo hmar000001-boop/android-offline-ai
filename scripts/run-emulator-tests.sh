@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
 # Invoked as one command by reactivecircus/android-emulator-runner.
-# Keep pipeline output visible and return Gradle's exit status to the action.
+# Diagnose test APK runtime packaging before executing the instrumentation suite.
 set -u
 
 set +e
-gradle --no-daemon connectedDebugAndroidTest --stacktrace 2>&1 | tee emulator-tests.log
-pipeline_status=("${PIPESTATUS[@]}")
+bash scripts/diagnose-instrumentation-runtime.sh 2>&1 | tee instrumentation-runtime-diagnostics.log
+diagnostic_status=("${PIPESTATUS[@]}")
 set -e
 
-gradle_status="${pipeline_status[0]}"
-tee_status="${pipeline_status[1]}"
+diagnostic_command_status="${diagnostic_status[0]:-1}"
+diagnostic_tee_status="${diagnostic_status[1]:-1}"
+
+# Keep running the real suite even if a diagnostic command was unavailable or failed.
+# The provider probe is intentionally independent so its crash can be distinguished
+# from AndroidJUnitRunner startup and the individual test cases.
+set +e
+gradle --no-daemon connectedDebugAndroidTest --stacktrace 2>&1 | tee emulator-tests.log
+test_status=("${PIPESTATUS[@]}")
+set -e
+
+gradle_status="${test_status[0]:-1}"
+tee_status="${test_status[1]:-1}"
 
 if (( gradle_status != 0 )); then
   exit "$gradle_status"
 fi
-exit "$tee_status"
+if (( tee_status != 0 )); then
+  exit "$tee_status"
+fi
+if (( diagnostic_command_status != 0 )); then
+  exit "$diagnostic_command_status"
+fi
+exit "$diagnostic_tee_status"

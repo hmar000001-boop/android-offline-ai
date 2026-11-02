@@ -151,6 +151,9 @@ jobs:
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
             app/build/outputs/connected_android_test_additional_output/
+            app/build/outputs/apk/androidTest/debug/*.apk
+            build/instrumentation-runtime-diagnostics/**
+            instrumentation-runtime-diagnostics.log
             emulator-tests.log
             build/reports/problems/problems-report.html
           if-no-files-found: ignore
