@@ -927,6 +927,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return true
         }
 
+        /** Reports whether Android has actually bound the service, not merely enabled its setting. */
+        fun isServiceConnected(): Boolean = currentInstance?.let { it.connected && !it.destroyed } == true
+
         fun isAccessibilityEnabled(context: Context): Boolean {
             val expected = ComponentName(context, ScreenProtectionAccessibilityService::class.java)
                 .flattenToString()

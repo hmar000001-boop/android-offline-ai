@@ -217,7 +217,6 @@ private fun ScreenVeilHome(
                     Text(
                         when {
                             !protection.active -> "Protection is paused"
-                            protection.opaqueCoverActive -> "App temporarily covered · safe fallback active"
                             !protection.modelReady -> "Protection not ready · selected model profile is loading/unavailable"
                             else -> "Protection active"
                         },
@@ -443,7 +442,7 @@ private fun ScreenVeilHome(
                 Text("• Internet access is used only when you explicitly download the models for the selected profile.")
                 Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")
                 Text("• Android rate-limits accessibility screenshots. Capture is event-triggered with periodic refresh, not a 30-FPS video recording. Fast video may be only partially inspected.", color = MaterialTheme.colorScheme.error)
-                Text("• During window changes, scrolling, malformed model output or inference errors, ScreenVeil temporarily covers the active app window with an opaque layer until a valid analysis completes. This is intentionally conservative and can interrupt visibility while still allowing touch input.", color = MaterialTheme.colorScheme.error)
+                Text("• During window changes or scrolling, previous localized masks are removed while the new screenshot is analyzed, so content can briefly be unprotected. Repeated capture, model or overlay failures pause protection and remove ScreenVeil's overlay; technical failures never place a full-window cover.", color = MaterialTheme.colorScheme.error)
                 Text("• Every model can miss content or classify it incorrectly. The fast profile does not classify all media types; Gemma may also return incorrect or delayed media boxes. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
                 Text("• Accessibility access is powerful. ScreenVeil uses events only to schedule screenshots and does not read window text, inspect view nodes, tap, or control other apps.", style = MaterialTheme.typography.bodySmall)
             }

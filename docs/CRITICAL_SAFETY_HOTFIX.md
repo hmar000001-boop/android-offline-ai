@@ -32,4 +32,4 @@ When protection starts, during screen reflow, or after a technical failure, cont
 
 ## Release status
 
-Version 1.5.1 / versionCode 7 (upgrade over the previous 1.5.0 / versionCode 6 package). This document records source changes only. Android Gradle build, instrumentation tests, emulator validation and physical-device validation have not yet been run for this hotfix.
+Version 1.5.1 / versionCode 7 (upgrade over the previous 1.5.0 / versionCode 6 package). This document records source changes only. Android Gradle build, instrumentation tests, emulator validation and physical-device validation have not yet been run for this hotfix. The repository now includes `ProtectionLifecycleInstrumentedTest` and a GitHub Actions emulator matrix for API 34 and API 36. The tests assert that a clean install defaults OFF, Accessibility binding does not create a redaction window, a start without verified model files fails safely, and Stop leaves no ScreenVeil window. These are test definitions, not passing results until GitHub Actions executes them.

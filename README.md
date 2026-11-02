@@ -93,7 +93,7 @@ Pinned versions are in `settings.gradle.kts` and `app/build.gradle.kts`. CI uses
 ./gradlew --no-daemon clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-The GitHub Actions workflow builds a debug APK and uploads unit-test / lint reports plus the full Gradle log after failure. The local wrapper script checks the pinned Gradle distribution SHA-256; the binary wrapper JAR is not included.
+The GitHub Actions workflow builds a debug APK, uploads unit-test / lint reports and the full Gradle log, then runs the Accessibility lifecycle instrumentation tests on Android API 34 and API 36 emulators and uploads their reports. The local wrapper script checks the pinned Gradle distribution SHA-256; the binary wrapper JAR is not included.
 
 ## Verification status
 
@@ -107,6 +107,6 @@ The source archive includes tests for model-catalog policy, profiles, parser val
 - No analytics, telemetry or screenshot-upload endpoint is implemented.
 
 
-## Critical safety lifecycle update (1.5.0)
+## Critical safety lifecycle update (1.5.1)
 
-Protection now defaults OFF and requires a separate Start tap after Accessibility is enabled. Startup, window changes, and technical failures do not place a full-window grey/opaque cover. Model initialization failure, repeated inference/capture failure, or overlay failure pauses protection and clears the overlay. See `docs/CRITICAL_SAFETY_HOTFIX.md`. Automated Android/emulator tests are intentionally pending.
+Protection now defaults OFF and requires a separate Start tap after Accessibility is enabled. Startup, window changes, and technical failures do not place a full-window grey/opaque cover. Model initialization failure, repeated inference/capture failure, or overlay failure pauses protection and clears the overlay. See `docs/CRITICAL_SAFETY_HOTFIX.md`. Android instrumentation tests now exercise the Accessibility startup, missing-model safe-stop and explicit-stop lifecycle on API 34 and API 36 emulators in GitHub Actions; these tests still need a successful CI run.

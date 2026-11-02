@@ -24,7 +24,7 @@ object ModelInstaller {
     private const val BUFFER_SIZE = 1024 * 1024
     private const val MAX_REDIRECTS = 5
     private const val REQUIRED_FREE_SPACE_MARGIN = 250_000_000L
-    private const val USER_AGENT = "ScreenVeil-Android/1.4.0"
+    private const val USER_AGENT = "ScreenVeil-Android/1.5.1"
 
     private val approvedDownloadHosts = setOf(
         "storage.googleapis.com",

@@ -80,3 +80,8 @@ The user's GitHub Actions log reached `:app:compileDebugKotlin` and reported one
 ## Critical usability/safety hotfix (1.5.1 / versionCode 7)
 
 Source now defaults protection OFF, requires an explicit Start tap after Accessibility is enabled, removes global opaque fallback paths, bounds capture/model retries, pauses and clears overlays after runtime failures, and disables specialist whole-screen scoring. See `CRITICAL_SAFETY_HOTFIX.md`. Per user request, Android emulator/instrumentation tests are deferred until the lifecycle changes are packaged; no Gradle build or device validation is claimed for this source revision.
+
+
+## 1.5.1 emulator lifecycle tests added
+
+Added Android instrumentation tests for: protection default OFF on clean install; Accessibility service binding without auto-start or overlay; explicit start with no verified model files stopping safely; and idempotent Stop with no remaining ScreenVeil overlay window. GitHub Actions now runs `connectedDebugAndroidTest` on API 34 and API 36 emulator images. These tests have not yet been executed; a successful workflow run is still required.
