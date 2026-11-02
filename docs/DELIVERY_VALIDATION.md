@@ -168,3 +168,8 @@ See `EMULATOR_DEBOUNCE_AND_SECURE_FIX_2026-11-02.md`. This revision has not yet 
 ## 2026-11-02 — fixture runtime-state IPC correction
 
 The Android 14 emulator run confirmed the fixture Activity as `topResumedActivity`, but the test observed an all-default runtime report. The fixture report had been exchanged through SharedPreferences across the instrumentation/target process boundary, which Android does not support. Replaced this channel with a test-only exported ContentProvider and `ContentResolver.call()` IPC, and declared its authority in the target package's `<queries>` list for Android package-visibility compatibility. See `EMULATOR_FIXTURE_STATE_IPC_2026-11-02.md`. This correction is source-reviewed and statically validated only; Gradle compilation and API 34/API 36 execution remain pending. The 19:10 run did not reach debounce or secure-window behavior assertions.
+
+### 2026-11-02 — instrumentation Kotlin runtime packaging
+
+The API 34 run at 19:27 UTC crashed during test APK process startup with `NoClassDefFoundError: kotlin.jvm.internal.Intrinsics` from `ScreenVeilFixtureStateProvider` static initialization. The instrumentation APK's runtime dependency configuration did not provide a guaranteed Kotlin stdlib to manifest-declared fixture components. `androidTestImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.21")` is now explicit and aligned with the Kotlin plugin version. This is a build/test packaging correction only. Re-run API 34 and API 36 before treating fixture IPC or the lifecycle suite as validated.
+

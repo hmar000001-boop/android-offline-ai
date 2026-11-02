@@ -71,6 +71,10 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    // The instrumentation APK installs Kotlin fixture components (Activity and ContentProvider)
+    // before AndroidJUnitRunner starts. Keep Kotlin's runtime explicitly on the test APK's
+    // runtime classpath; app `implementation` dependencies are not a safe substitute here.
+    androidTestImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.21")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")

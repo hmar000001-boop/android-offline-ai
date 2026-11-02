@@ -24,3 +24,16 @@ The fixture Activity continues to report the actual `Window.attributes.flags`, t
 Static source validation can confirm that the unsupported SharedPreferences exchange has been removed and the provider is declared consistently. It cannot establish that the test APK provider is correctly merged, installed, or invoked on Android. The next API 34 run must prove that it can read `created=true`, `focused=true`, and the expected flag bit before any capture test proceeds. API 36 still needs to be run after API 34.
 
 The 19:10 run did not reach the debounce or secure-screenshot behavior tests because fixture setup failed first. Therefore that run provides no new result about whether the debounce test's exact-one-capture assertion passes, or whether Android returns `ERROR_TAKE_SCREENSHOT_SECURE_WINDOW` in the secure fixture test.
+
+
+## Instrumentation process startup correction — 19:27 UTC API 34 run
+
+The first run with the IPC provider failed while Android was installing test-APK content providers, before the first test could execute. Logcat identifies the missing class precisely:
+
+`NoClassDefFoundError: kotlin.jvm.internal.Intrinsics`
+
+The crash points to the provider's Kotlin companion-object initialization (`Uri.parse("content://$AUTHORITY")`). This is a test-APK runtime packaging defect: Kotlin fixture components are declared in the instrumentation APK manifest and can be instantiated by ActivityThread before AndroidJUnitRunner starts. Compilation of `androidTest` Kotlin source does not prove that Kotlin stdlib is present in the installed test APK.
+
+The app module's Kotlin plugin and production `implementation` dependencies are not treated as proof of the instrumentation APK's runtime contents. The Gradle configuration now explicitly declares `org.jetbrains.kotlin:kotlin-stdlib:2.4.21` under `androidTestImplementation`, matching the Kotlin Android/Compose plugin version. This supplies `Intrinsics` and the Kotlin runtime used by both the fixture provider and fixture Activity at component startup. No production dependency or production source was changed.
+
+The next emulator run must verify that the test process installs the provider and launches the fixture before evaluating the provider IPC state. This source change has not yet been compiled or executed in an emulator here.
