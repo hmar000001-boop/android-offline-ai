@@ -1,5 +1,6 @@
 package dev.screenveil.app.capture
 
+import android.app.UiAutomation
 import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
@@ -21,6 +22,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ProtectionLifecycleInstrumentedTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    // UiAutomation suppresses non-test Accessibility services by default. ScreenVeil's
+    // lifecycle tests must explicitly allow the app's own service to bind.
+    private val uiAutomation by lazy(LazyThreadSafetyMode.NONE) {
+        instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+    }
     private val context: Context get() = instrumentation.targetContext
 
     private var originalEnabledServices: String? = null
@@ -74,9 +80,7 @@ class ProtectionLifecycleInstrumentedTest {
     @Test
     fun enablingAccessibilityDoesNotStartProtectionOrCreateOverlay() {
         enableScreenVeilAccessibility()
-        await("Accessibility service connection") {
-            ScreenProtectionAccessibilityService.isServiceConnected()
-        }
+        awaitAccessibilityServiceConnection()
 
         val state = ProtectionStatus.state.value
         assertFalse("Accessibility binding must not start monitoring", state.active)
@@ -88,9 +92,7 @@ class ProtectionLifecycleInstrumentedTest {
     @Test
     fun startWithoutVerifiedModelsStopsSafelyAndLeavesNoOverlay() {
         enableScreenVeilAccessibility()
-        await("Accessibility service connection") {
-            ScreenProtectionAccessibilityService.isServiceConnected()
-        }
+        awaitAccessibilityServiceConnection()
 
         assertTrue("Service should accept the explicit start request", ScreenProtectionAccessibilityService.requestStart())
         await("missing-model safe-stop state") {
@@ -108,9 +110,7 @@ class ProtectionLifecycleInstrumentedTest {
     @Test
     fun explicitStopIsIdempotentAndRemovesAnyRedactionWindow() {
         enableScreenVeilAccessibility()
-        await("Accessibility service connection") {
-            ScreenProtectionAccessibilityService.isServiceConnected()
-        }
+        awaitAccessibilityServiceConnection()
 
         assertTrue(ScreenProtectionAccessibilityService.requestStop())
         await("stopped status") { !ProtectionStatus.state.value.active }
@@ -130,10 +130,41 @@ class ProtectionLifecycleInstrumentedTest {
         val services = (existing + component).joinToString(":")
         shell("settings put secure enabled_accessibility_services '${shellQuote(services)}'")
         shell("settings put secure accessibility_enabled 1")
+
+        val configuredServices = shell("settings get secure enabled_accessibility_services")
+            .trim().split(':').filter { it.isNotBlank() }
+        assertTrue(
+            "Test setup did not enable the ScreenVeil service component. " +
+                "Configured services: $configuredServices",
+            configuredServices.any { it.equals(component, ignoreCase = true) }
+        )
+        assertTrue(
+            "Global Accessibility setting did not become enabled",
+            shell("settings get secure accessibility_enabled").trim() == "1"
+        )
     }
 
     private fun hasRedactionWindow(): Boolean =
         shell("dumpsys window windows").contains("ScreenVeil redaction", ignoreCase = true)
+
+    private fun awaitAccessibilityServiceConnection() {
+        try {
+            await("Accessibility service connection", timeoutMs = 20_000L) {
+                ScreenProtectionAccessibilityService.isServiceConnected()
+            }
+        } catch (failure: AssertionError) {
+            val enabledServices = shell("settings get secure enabled_accessibility_services").trim()
+            val accessibilityEnabled = shell("settings get secure accessibility_enabled").trim()
+            val accessibilityDump = shell("dumpsys accessibility").takeLast(12_000)
+            throw AssertionError(
+                "Timed out waiting for ScreenVeil AccessibilityService. " +
+                    "enabled_accessibility_services=$enabledServices; " +
+                    "accessibility_enabled=$accessibilityEnabled; " +
+                    "dumpsys accessibility (tail):\n$accessibilityDump",
+                failure
+            )
+        }
+    }
 
     private fun await(description: String, timeoutMs: Long = 12_000L, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -152,7 +183,7 @@ class ProtectionLifecycleInstrumentedTest {
     private fun shellQuote(value: String): String = value.replace("'", "'\\''")
 
     private fun shell(command: String): String {
-        val descriptor = instrumentation.uiAutomation.executeShellCommand(command)
+        val descriptor = uiAutomation.executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
     }
 }
