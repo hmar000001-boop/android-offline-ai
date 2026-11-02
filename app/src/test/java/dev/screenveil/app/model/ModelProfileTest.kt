@@ -6,19 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelProfileTest {
-    @Test fun balancedProfileUsesFourSpecialistModelsAndNoGemma() {
+    @Test fun balancedProfileUsesThreeSpecialistModelsAndNoGemma() {
         val ids = ModelProfile.BALANCED_SPECIALIZED.requiredModels.map { it.id }.toSet()
-        assertEquals(4, ids.size)
+        assertEquals(3, ids.size)
         assertTrue(ModelIds.PERSON_DETECTOR in ids)
-        assertTrue(ModelIds.CLOTHING_CLASSIFIER in ids)
         assertTrue(ModelIds.OPEN_NSFW in ids)
         assertTrue(ModelIds.VIT_NSFW in ids)
         assertFalse(ModelIds.GEMMA in ids)
     }
 
-    @Test fun fastProfileDoesNotRequireViTOrGemma() {
+    @Test fun fastProfileUsesOnlyPersonDetectorAndOneNsfwClassifier() {
         val ids = ModelProfile.FAST_SPECIALIZED.requiredModels.map { it.id }.toSet()
-        assertEquals(3, ids.size)
+        assertEquals(setOf(ModelIds.PERSON_DETECTOR, ModelIds.OPEN_NSFW), ids)
         assertFalse(ModelIds.VIT_NSFW in ids)
         assertFalse(ModelIds.GEMMA in ids)
     }

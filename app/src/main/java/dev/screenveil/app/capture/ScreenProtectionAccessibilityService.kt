@@ -209,9 +209,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
         if (!connected || destroyed) return
         val requestedProfile = preferences.getModelProfile()
-        if (!ModelInstaller.isProfileInstalled(this, requestedProfile)) {
+        if (!ModelInstaller.hasProfileMarkers(this, requestedProfile)) {
             val missing = requestedProfile.requiredModels
-                .filterNot { ModelInstaller.isVerifiedInstalled(this, it) }
+                .filterNot { ModelInstaller.hasVerifiedMarker(this, it) }
                 .joinToString { it.displayName }
             ProtectionStatus.update(
                 ProtectionStatus.State(

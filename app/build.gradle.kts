@@ -12,8 +12,8 @@ android {
         applicationId = "dev.screenveil.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "1.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -67,7 +67,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
-    implementation("com.google.mediapipe:tasks-vision:0.10.35")
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")

@@ -38,3 +38,11 @@ The corresponding Compose `weight` API is scoped to `RowScope`/`ColumnScope`; th
 ## Accessibility screenshot API baseline
 
 The capture implementation requires Android API 34 / Android 14 because it uses `AccessibilityService.takeScreenshotOfWindow(int, Executor, TakeScreenshotCallback)`. The manifest sets `minSdk = 34`; CI still compiles against API 36. `canTakeScreenshot=true` must remain in `res/xml/accessibility_service_config.xml`, and `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` must be enabled to obtain the active application window ID and bounds. Do not replace this with a MediaProjection flow without an explicit product decision.
+
+## Local model runtime dependencies (ScreenVeil 1.3.0)
+
+- ONNX Runtime Android `1.31.1` runs the two specialist ONNX classifiers.
+- TensorFlow Lite Task Vision `0.4.4` runs the EfficientDet-Lite0 TFLite person detector. This is the standalone TensorFlow Lite Task Vision artifact; the MediaPipe Tasks Vision Android SDK is not included.
+- LiteRT-LM Android `0.18.0` is used only by the separate optional Gemma profile.
+
+The app's only implemented network client is the explicit model installer. Do not add analytics/telemetry or a remote inference client under the model-download-only network policy.

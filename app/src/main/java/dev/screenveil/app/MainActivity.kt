@@ -36,6 +36,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         removeAbandonedFrameFiles()
+        ModelInstaller.removeRetiredArtifacts(this)
         accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
 
         setContent {
@@ -96,8 +98,8 @@ class MainActivity : ComponentActivity() {
 
     private fun beginProtection() {
         val profile = AppPreferences(this).getModelProfile()
-        if (!ModelInstaller.isProfileInstalled(this, profile)) {
-            val missing = profile.requiredModels.filterNot { ModelInstaller.isVerifiedInstalled(this, it) }
+        if (!ModelInstaller.hasProfileMarkers(this, profile)) {
+            val missing = profile.requiredModels.filterNot { ModelInstaller.hasVerifiedMarker(this, it) }
                 .joinToString { it.displayName }
             Toast.makeText(this, "Download and verify the selected profile models: $missing", Toast.LENGTH_LONG).show()
             return
@@ -126,7 +128,7 @@ class MainActivity : ComponentActivity() {
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = false,
-                modelReady = ModelInstaller.isProfileInstalled(this, AppPreferences(this).getModelProfile()),
+                modelReady = ModelInstaller.hasProfileMarkers(this, AppPreferences(this).getModelProfile()),
                 message = "Protection paused · Accessibility remains enabled"
             )
         )
@@ -163,10 +165,18 @@ private fun ScreenVeilHome(
     var installedModelIds by remember {
         mutableStateOf(
             SpecializedModelCatalog.all
-                .filter { ModelInstaller.isVerifiedInstalled(context, it) }.map { it.id }.toSet()
+                .filter { ModelInstaller.hasVerifiedMarker(context, it) }.map { it.id }.toSet()
         )
     }
     val activeProfileInstalled = selectedProfile.requiredModels.all { it.id in installedModelIds }
+    LaunchedEffect(protection.error, protection.modelReady, selectedProfile) {
+        // The service performs a full SHA-256 re-hash immediately before loading. If it removes
+        // a stale/corrupt marker on failure, refresh the UI so the user can download again.
+        if (!protection.modelReady && protection.error != null) {
+            installedModelIds = SpecializedModelCatalog.all
+                .filter { ModelInstaller.hasVerifiedMarker(context, it) }.map { it.id }.toSet()
+        }
+    }
     var downloadRunning by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableFloatStateOf(0f) }
     var downloadLabel by remember { mutableStateOf("") }
@@ -294,9 +304,9 @@ private fun ScreenVeilHome(
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(model.displayName, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                                Text(if (model.id in installedModelIds) "Verified" else "Not installed", color = if (model.id in installedModelIds) Color(0xFF22643C) else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                Text(if (model.id in installedModelIds) "Installed · hash checked on load" else "Not installed", color = if (model.id in installedModelIds) Color(0xFF22643C) else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                             }
-                            Text("${model.runtime} · ${model.license} · ${(model.minimumBytes / 1_000_000)}+ MB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${model.runtime} · declared ${model.license} · ${(model.minimumBytes / 1_000_000)}–${(model.maximumBytes / 1_000_000)} MB bounds", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("SHA-256 pinned · ${model.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -311,7 +321,7 @@ private fun ScreenVeilHome(
                 val requiredModels = selectedProfile.requiredModels
                 val missingModels = requiredModels.filter { it.id !in installedModelIds }
                 if (activeProfileInstalled) {
-                    Text("All selected profile models are installed and verified.", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
+                    Text("All selected model files have verification markers; full SHA-256 is rechecked before loading.", color = Color(0xFF22643C), fontWeight = FontWeight.SemiBold)
                 } else if (downloadRunning) {
                     CircularProgressIndicator(progress = { downloadProgress })
                     Text(downloadLabel, style = MaterialTheme.typography.bodySmall)
@@ -334,7 +344,7 @@ private fun ScreenVeilHome(
                                         }
                                     }
                                     installedModelIds = SpecializedModelCatalog.all
-                                        .filter { ModelInstaller.isVerifiedInstalled(context, it) }.map { it.id }.toSet()
+                                        .filter { ModelInstaller.hasVerifiedMarker(context, it) }.map { it.id }.toSet()
                                     downloadLabel = "All selected model artifacts passed SHA-256 verification."
                                     if (accessibilityEnabled && preferences.isProtectionEnabled()) {
                                         ScreenProtectionAccessibilityService.requestStart()
@@ -355,16 +365,16 @@ private fun ScreenVeilHome(
                     Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Model downloads are user-initiated and SHA-256 checked against immutable catalog entries. No model is trained or fine-tuned. All inference is on-device and offline after installation. The Balanced profile downloads about 142 MB of specialist weights; Gemma is a separate ~2.6 GB option.",
+                    "Network access is used only for model downloads initiated here. Downloads require HTTPS, approved hosts, bounded sizes and exact pinned SHA-256. Screen images are not uploaded; inference is local. No model is trained or fine-tuned. Balanced is about 60 MB; Fast about 38 MB; Gemma is a separate ~2.6 GB option. Hash verification confirms file identity, not model safety or accuracy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
                     Text(
                         if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
-                            "Scope limitation: the ensemble combines two general NSFW classifiers, a person detector and a five-class clothing classifier. The ViT scans nine overlapping screen tiles only when no person is detected. It cannot guarantee detection of every swimsuit, every image/video frame or every suggestive scene. Thresholds are conservative initial heuristics, not Galaxy S24 FE benchmark results. Uncertain person crops are redacted by default."
+                            "Scope limitation: this profile has one person detector and two general NSFW classifiers, but NO approved clothing/swimwear classifier. The ViT scans nine overlapping screen tiles only when no person is detected. Non-explicit person boxes remain UNCERTAIN and are redacted only while 'Redact uncertain content' is enabled (enabled by default). This is a conservative privacy trade-off, not semantic swimwear detection. It cannot guarantee every swimsuit, every image/video frame or every suggestive scene. Thresholds are uncalibrated and not Galaxy S24 FE benchmark results."
                         } else {
-                            "Scope limitation: the fast profile uses person detections, a five-class clothing classifier and Yahoo OpenNSFW. It does not scan the whole screen in tiles. It cannot guarantee detection of every swimsuit, every image without a detected person, cartoons, or all suggestive scenes. Uncertain person crops are redacted by default."
+                            "Scope limitation: the fast profile has a person detector and Yahoo OpenNSFW only; it has NO approved clothing/swimwear classifier and no screen-tile fallback. Non-explicit person boxes remain UNCERTAIN and are redacted only while 'Redact uncertain content' is enabled (enabled by default). It cannot guarantee swimwear, images without a detected person, cartoons or all suggestive scenes."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error

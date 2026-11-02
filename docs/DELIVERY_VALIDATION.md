@@ -1,60 +1,51 @@
-# ScreenVeil delivery validation — 2026-11-02
+# Delivery validation — balanced model approval update
 
-## Multi-model functionality added
+## Changes applied to this source package
 
-- Added a default **Balanced multi-model · offline** profile that does not use Gemma.
-- Added a **Fast specialized · offline** profile for lower model storage / compute cost.
-- Kept **Gemma 4 vision** as an independent optional profile.
-- Balanced specialist profile now uses four existing pretrained artifacts: Google EfficientDet-Lite0 person detection, Electblake EfficientNetV2-S clothing classification, Yahoo OpenNSFW ResNet-50 and Marqo-derived ViT-Tiny NSFW.
-- Added pinned model source revisions/URLs, byte-size floors and SHA-256 digests to the trusted catalog; existing generic downloader stores weights privately and verifies the full file before loading.
-- Added ViT-Tiny ONNX inference with documented 384×384 RGB NCHW preprocessing and `[NSFW, safe]` logit interpretation.
-- Added a nine-tile overlapping ViT scan when the Balanced profile finds no person boxes; positive tiles are masked as whole regions.
-- The Fast profile skips the ViT classifier and tile pass.
-- Changed the five-class clothing mapping so `denim_shorts`, `maid`, `nurse`, unknown labels and low-confidence predictions are `UNCERTAIN`, never `ALLOW`. `swim_bikini` and `lingerie` have explicit thresholds.
-- Added unit tests for clothing label interpretation, threshold boundaries and non-finite confidence/scores.
-- Corrected profile switching: previous detector runtime is closed and the newly selected profile is initialized on the serialized inference worker.
-- Updated app version to 1.1.0 and refreshed model governance, third-party notices and device-validation documentation.
+- Replaced the `TrustedModel` name with `ApprovedModelArtifact` so a matching hash is not represented as a safety certification.
+- Reduced the selectable specialist catalog to three pretrained artifacts: Google EfficientDet-Lite0, Yahoo OpenNSFW ONNX and ViT-Tiny NSFW ONNX. Gemma 4 remains a separate optional profile.
+- Removed Electblake's five-class clothing classifier from all selectable profiles. The app also removes its legacy downloaded artifact and marker on startup/upgrade.
+- Replaced the MediaPipe Tasks Vision runtime dependency with standalone TensorFlow Lite Task Vision `0.4.4` for person detection. This avoids the MediaPipe Tasks usage-metrics collection described in its documentation; the app's selected policy allows network access only for model downloads.
+- Restricted downloads to the fixed catalog, HTTPS, manually checked redirect hosts, byte-size bounds and exact SHA-256 verification. A model is moved into its final private-storage location only after all checks pass.
+- Updated model profiles, Compose UI descriptions, security notes, third-party notices, model governance and device-test instructions to remove the old four-specialist-model/clothing-classifier claims.
+- Added catalog-policy tests for the admitted artifact IDs, HTTPS/hash/size metadata, specialist independence from Gemma and the separate optional Gemma profile.
+- Updated app version to `1.3.0` / version code `4`.
 
-## Checks executed in this environment
+## Admitted models and profile composition
 
-- Source tree and model catalog reviewed after changes.
-- Six geometry smoke assertions pass using the installed Kotlin compiler and minimal type stub.
-- Specialist decision policy compiled independently with Kotlin; a standalone harness executed 9 assertions (positive swimwear, below threshold, lingerie, no-safe mapping, non-finite confidence and NSFW threshold semantics).
-- Model catalog/profile compiled independently with Kotlin; a standalone harness executed 5 assertions (four-model Balanced profile without Gemma, three-model Fast profile without Gemma, separate Gemma profile and default fallback).
-- All main/test Kotlin files were passed through the compiler parser; the standalone compile stops on unresolved Android/Compose/runtime symbols because the Android dependency classpath is unavailable, with no Kotlin syntax diagnostics.
-- All five Android XML files are well-formed.
-- GitHub Actions YAML parsed successfully.
-- Gradle bootstrap shell script passes `bash -n`.
-- All 28 JUnit test methods are present in source.
-- ZIP integrity and SHA-256 are checked at packaging time.
+- Balanced: EfficientDet-Lite0 + OpenNSFW + ViT-Tiny NSFW (three artifacts, no Gemma).
+- Fast: EfficientDet-Lite0 + OpenNSFW (two artifacts, no Gemma).
+- Gemma vision: Gemma 4 E2B only (optional, separate download).
 
-The standalone policy harness is not the Gradle JUnit suite. It verifies pure mapping logic only.
+There is no approved swimwear-specific model in this version. The specialist pipeline masks non-explicit person boxes as `UNCERTAIN` when the user's conservative uncertain-redaction setting is enabled. This can over-mask ordinary people and does not establish swimwear detection accuracy.
+
+## Checks performed in this environment
+
+- Source/docs grep confirms the Electblake clothing classifier is absent from the active catalog, selectable profiles and runtime implementation. Historical references may remain only in exclusion/migration documentation.
+- Kotlin source inspection confirms `SpecializedScreenModerationDetector` imports standalone TensorFlow Lite Task Vision rather than MediaPipe Tasks.
+- The manifest documents `INTERNET` for user-initiated downloads; source search finds the model installer as the sole application network client. This is a source-level check, not a runtime packet capture.
+- Android XML files are parsed and checked for well-formedness.
+- GitHub Actions YAML is parsed and the Gradle bootstrap script is checked with `bash -n`.
+- ZIP integrity is checked after packaging and the final SHA-256 is recorded.
 
 ## Checks not executed — do not treat as passed
 
-- Android Gradle `clean testDebugUnitTest lintDebug assembleDebug` cannot be run in this environment: Android SDK Platform 36 / Build Tools 36.0.0 are unavailable and the pinned Gradle distribution could not be resolved because DNS for `services.gradle.org` failed.
-- The Android-specific ONNX / MediaPipe code has not been compiled or run in an Android build environment during this delivery.
-- No emulator or Galaxy S24 FE was available. Installation, model downloads through Android networking, ONNX input binding compatibility, MediaPipe delegate behavior, overlay alignment, battery, peak memory, latency and thermal stability are not device-verified.
-- The four-model classifier combination has not been calibrated against a labelled ScreenVeil dataset. The thresholds are heuristics. There are no measured per-category recall/precision, false-negative, false-positive or box-IoU values.
-- Model download artifact hashes are pinned in source based on upstream artifact metadata; the actual device download-and-hash path must still pass in CI/device testing.
+- The full Android Gradle command `./gradlew --no-daemon clean testDebugUnitTest lintDebug assembleDebug` has not been completed in this environment. No Android SDK platform is installed, no system Gradle is available, and the pinned Gradle distribution previously failed to resolve because DNS for `services.gradle.org` was unavailable.
+- Android `compileDebugKotlin`, Gradle unit tests, Lint and APK assembly have not been confirmed for this exact revision.
+- The ONNX and TFLite artifacts have not all been downloaded by an Android device and initialized on the S24 FE in this delivery.
+- No Galaxy S24 FE latency, memory, battery, thermal, overlay or accessibility test has been run.
+- There is no independent security audit of every model binary or complete resolved-dependency SBOM.
+- There is no representative ScreenVeil dataset or measured false-negative/false-positive result. No model has been calibrated for the product's swimwear requirement.
 
 ## Remaining release gates
 
-1. Run the GitHub Actions workflow or the documented Gradle command on a networked machine with JDK 21 and Android SDK Platform 36 / Build Tools 36.0.0. Resolve all compile, test and lint failures.
-2. Install on the Galaxy S24 FE and verify model downloads and SHA-256 checks for all four specialist files. Verify each ONNX model's input/output names, dimensions and successful first inference; verify MediaPipe person detection.
-3. Benchmark Fast versus Balanced profiles: initialization, P50/P95 capture-to-overlay latency, peak RAM/PSS, sustained battery drain and temperature for at least 30 minutes.
-4. Evaluate lawful representative data for one-piece swimsuits, bikinis, swim trunks, rash guards, sports swimwear, lingerie, ordinary beach scenes, partially visible/small people, multiple people, images without a person, drawings, screenshots, collages and video frames.
-5. Report per-category recall/precision, false negatives, false positives, media-region coverage and box IoU. Tune thresholds only against a held-out validation set and preserve the raw results.
-6. Generate a complete release SBOM and verify all upstream license notices before redistribution.
+1. Run GitHub Actions or the documented Gradle command on a networked machine with JDK 21 and Android SDK Platform 36 / Build Tools 36.0.0. Resolve any compile, test and lint failures.
+2. Download all three Balanced model artifacts on an Android device. Verify the byte-size checks and full SHA-256 re-hash before initialization. Separately test the optional Gemma download if desired.
+3. Run image fixtures through both ONNX classifiers and the TFLite person detector; confirm tensor names, dimensions, output order and preprocessing.
+4. Install on the Galaxy S24 FE. Benchmark P50/P95 capture-to-overlay time, peak RAM/PSS, native heap, battery and thermal stability for at least 30 minutes per profile.
+5. Evaluate lawful representative image/video samples and report per-category precision/recall, false negatives, false positives, person-detection recall, region coverage and box IoU. Include swimwear categories; state clearly that current models do not have a dedicated swimwear label.
+6. Generate a complete release SBOM and review all transitive runtime licenses and security advisories.
 
 ## Release classification
 
-This archive is a multi-model experimental source build, **not** a verified Android APK and **not** production-ready protection. Three non-Gemma pretrained models are used in the Fast profile; the default Balanced profile uses four non-Gemma pretrained artifacts (one detector plus three classifiers). Gemma remains optional. Physical Android build and target-device/dataset validation remain mandatory; do not claim complete swimwear detection or guaranteed real-time video redaction.
-
-
-## 2026-11-02 Kotlin compile follow-up
-
-- Corrected three ONNX Runtime output reads: `OrtSession.Result.get(String)` returns `Optional<OnnxValue>`, so the code now unwraps it with `orElseThrow` before accessing the tensor value.
-- Added `--stacktrace`, `tee build-output.log`, and artifact upload for the full Gradle log and Gradle problems report to the Android GitHub Actions workflow.
-- Verified the corrected Optional-unwrapping expression independently with `kotlinc` against a minimal Java stub matching the official ONNX Runtime API signature.
-- Full Android build remains unverified in this environment because the Gradle distribution cannot be downloaded (DNS failure for `services.gradle.org`) and no Android SDK platform is installed.
+This is an updated experimental source package under the balanced model-approval policy. It is **not** a verified Android APK and **not** production-ready protection. Do not claim that all models are 100% safe, secure, trusted or accurate. The specialist profiles do not use Gemma, but neither provides validated swimwear-specific classification or guaranteed real-time video redaction.
