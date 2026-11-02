@@ -326,11 +326,9 @@ class ProtectionLifecycleInstrumentedTest {
                     ProtectionStatus.state.value.message.contains("FLAG_SECURE", ignoreCase = true)
             }
         } catch (failure: AssertionError) {
-            val focus = shell("dumpsys window windows").lineSequence()
-                .firstOrNull { it.contains("mCurrentFocus", ignoreCase = true) }.orEmpty()
             throw AssertionError(
                 "Secure-window test did not reach Android's secure-window refusal. " +
-                    "status=${ProtectionStatus.state.value}; currentFocus=$focus; " +
+                    "status=${ProtectionStatus.state.value}; resumedActivity=${resumedActivityDiagnostics()}; " +
                     "service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}",
                 failure
             )
@@ -524,18 +522,55 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     private fun launchFixtureWindow(secure: Boolean = false) {
-        // Keep shell launch here: the fixture is packaged in the instrumentation APK, not the
-        // target app process. UiAutomation can start it reliably through ActivityManager.
+        // The fixture is packaged in the instrumentation APK, separate from ScreenVeil's target
+        // package. Use ActivityManager's wait mode and inspect ActivityTaskManager's resumed
+        // Activity instead of parsing WindowManager's private dump format. On Android 13/14,
+        // `dumpsys window windows` may list `Window #...` entries without an mCurrentFocus line.
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
         val secureExtra = if (secure) " --ez secure true" else ""
-        shell("am start -n ${component.flattenToString()}$secureExtra")
-        await("test fixture activity in the foreground", timeoutMs = 10_000L) {
-            shell("dumpsys window windows").lineSequence()
-                .firstOrNull { it.contains("mCurrentFocus", ignoreCase = true) }
-                ?.contains(ScreenVeilFixtureActivity::class.java.name) == true
+        val launchOutput = shell("am start -W -n ${component.flattenToString()}$secureExtra")
+        assertTrue(
+            "ActivityManager did not report a successful fixture launch. " +
+                "component=${component.flattenToString()}; output=$launchOutput",
+            launchOutput.contains("Status: ok", ignoreCase = true)
+        )
+        try {
+            await("test fixture activity to become the resumed foreground activity", timeoutMs = 10_000L) {
+                isFixtureActivityResumed(component)
+            }
+        } catch (failure: AssertionError) {
+            throw AssertionError(
+                "Fixture launch returned successfully but it did not become the resumed activity. " +
+                    "component=${component.flattenToString()}; launchOutput=$launchOutput; " +
+                    "activityState=${resumedActivityDiagnostics()}",
+                failure
+            )
         }
         instrumentation.waitForIdleSync()
     }
+
+    private fun isFixtureActivityResumed(component: ComponentName): Boolean {
+        val dump = shell("dumpsys activity activities")
+        return dump.lineSequence().any { line ->
+            val isResumedRecord = line.contains("topResumedActivity", ignoreCase = true) ||
+                line.contains("mResumedActivity", ignoreCase = true) ||
+                line.contains("mFocusedActivity", ignoreCase = true)
+            isResumedRecord &&
+                line.contains(component.packageName) &&
+                line.contains(component.className)
+        }
+    }
+
+    private fun resumedActivityDiagnostics(): String =
+        shell("dumpsys activity activities").lineSequence()
+            .filter { line ->
+                line.contains("topResumedActivity", ignoreCase = true) ||
+                    line.contains("mResumedActivity", ignoreCase = true) ||
+                    line.contains("mFocusedActivity", ignoreCase = true)
+            }
+            .take(20)
+            .joinToString("\n")
+            .ifBlank { "No top/resumed/focused activity marker in dumpsys activity activities" }
 
     private fun secureFixtureFlagIsConfirmedInAccessibilityTree(): Boolean {
         val root = uiAutomation.rootInActiveWindow ?: return false

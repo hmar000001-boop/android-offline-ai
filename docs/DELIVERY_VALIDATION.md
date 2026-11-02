@@ -150,3 +150,8 @@ documents secure-setting writes and their normal-app restriction.
 ## 2026-11-02 emulator follow-up
 
 The API 34 run that followed the Accessibility-settings correction compiled both APKs and ran all 18 instrumentation tests; 16 passed and 2 exposed a debounce-test synchronization issue and an unverified FLAG_SECURE fixture/capture path. The analysis and corrections are documented in `EMULATOR_TWO_FAILURES_2026-11-02.md`. The corrected source has not yet been executed on an Android emulator; API 34 and API 36 GitHub Actions runs remain required.
+
+
+## 2026-11-02 — API 34 fixture foreground diagnostic
+
+See `EMULATOR_FOREGROUND_FIX_2026-11-02.md`. The previous instrumentation helper relied on `mCurrentFocus` inside `dumpsys window windows`, which is not stable on Android 13/14. It now checks ActivityManager launch success and resumed activity records. This is a test-harness correction; API 34/API 36 execution remains pending.
