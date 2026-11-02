@@ -220,8 +220,9 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
             pixels. If the item is displayed full-screen, use a box close to [0,0,1000,1000]. If
             several media items are visible, return a separate rectangle for each, up to 24 items.
             Never silently omit visible media to fit the limit. If the screen contains more than 24
-            distinct media items, return the full list; strict response validation must reject it
-            so the app keeps the screen covered instead of treating an incomplete list as safe. Do not omit
+            distinct media items, return the full list; strict response validation rejects an
+            incomplete/oversized response, causing protection to pause and report the error. The
+            app does not add a full-window technical-failure cover. Do not omit
             an image just because it is the only image on screen or because viewer controls cover part
             of it.
 

@@ -90,19 +90,9 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         val vitNsfw = vitNsfwSession // Optional in the Fast profile; required by Balanced profile catalog.
         val env = checkNotNull(ortEnvironment) { "ONNX Runtime is not initialized" }
 
-        // Independent image-level classifiers inspect the entire frame. High thresholds reduce
-        // interference from text and app chrome; they are starting heuristics, not benchmark claims.
-        val fullFrameOpenNsfw = classifyOpenNsfw(bitmap, nsfw, env)
-        val fullFrameVitNsfw = vitNsfw?.let { classifyVitNsfw(bitmap, it, env) }
-        val fullFrameScore = max(fullFrameOpenNsfw, fullFrameVitNsfw ?: 0f)
-        if (fullFrameScore >= FULL_FRAME_EXPLICIT_THRESHOLD) {
-            return DetectionResult(
-                regions = listOf(fullFrameRegion(ContentDecision.EXPLICIT)),
-                parseSucceeded = true,
-                diagnostic = "Full-frame NSFW ensemble flagged content (OpenNSFW=${formatScore(fullFrameOpenNsfw)}, ViT=${fullFrameVitNsfw?.let(::formatScore) ?: "not installed"})"
-            )
-        }
-
+        // Do not classify the entire screenshot as one redaction region. A high global NSFW
+        // score cannot justify obscuring system/app chrome or unrelated content. Content is
+        // evaluated per detected person or per bounded tile below.
         val detections = peopleDetector.detect(TensorImage.fromBitmap(bitmap))
             .mapNotNull { detection ->
                 val category = detection.categories.maxByOrNull { it.score } ?: return@mapNotNull null
@@ -116,17 +106,13 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 else RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
             }
 
-        // Never silently drop detections when the screen is unusually crowded. A full-frame
-        // uncertain result is safer than leaving people beyond the adapter limit unexamined.
-        if (detections.size > MAX_PERSON_CROPS) {
-            return DetectionResult(
-                listOf(fullFrameRegion(ContentDecision.UNCERTAIN)),
-                true,
-                "More than $MAX_PERSON_CROPS people were detected; conservative full-frame mask used"
-            )
-        }
+        // Bound work on crowded screenshots. Keep the detector's highest-ranked results (the
+        // ObjectDetector API returns confidence-ranked detections) and never replace them with a
+        // whole-screen mask. The diagnostic reports that some people were not evaluated.
+        val detectionsTruncated = detections.size > MAX_PERSON_CROPS
+        val selectedDetections = detections.take(MAX_PERSON_CROPS)
 
-        if (detections.isEmpty() && vitNsfw != null) {
+        if (selectedDetections.isEmpty() && vitNsfw != null) {
             val tiledRegions = scanScreenTilesWithVit(bitmap, vitNsfw, env)
             return DetectionResult(
                 regions = tiledRegions,
@@ -135,8 +121,8 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
             )
         }
 
-        val regions = ArrayList<DetectedMediaRegion>(detections.size)
-        for (bounds in detections) {
+        val regions = ArrayList<DetectedMediaRegion>(selectedDetections.size)
+        for (bounds in selectedDetections) {
             val left = bounds.left.toInt()
             val top = bounds.top.toInt()
             val width = bounds.width().toInt()
@@ -173,7 +159,11 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         return DetectionResult(
             regions = regions,
             parseSucceeded = true,
-            diagnostic = "Offline NSFW ensemble · ${regions.size} person region(s); non-explicit people are UNCERTAIN because no clothing model is approved. Full-frame OpenNSFW=${formatScore(fullFrameOpenNsfw)}, ViT=${fullFrameVitNsfw?.let(::formatScore) ?: "not installed"}"
+            diagnostic = buildString {
+                append("Offline NSFW ensemble · ${regions.size} person region(s); non-explicit people are UNCERTAIN because no clothing model is approved.")
+                if (detectionsTruncated) append(" More than $MAX_PERSON_CROPS people were detected; lower-ranked person boxes were not evaluated.")
+                append(" Whole-screen scoring is disabled to prevent global redaction.")
+            }
         )
     }
 
@@ -247,12 +237,6 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         return results
     }
 
-    private fun fullFrameRegion(decision: ContentDecision) = DetectedMediaRegion(
-        box = NormalizedBox(0, 0, 1000, 1000),
-        decision = decision,
-        mediaType = "image"
-    )
-
     override fun close() {
         runCatching { personDetector?.close() }
         runCatching { nsfwSession?.close() }
@@ -271,7 +255,6 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         private const val MAX_PERSON_DETECTIONS = 40
         private const val MAX_PERSON_CROPS = 24
         private const val MIN_PERSON_CROP_SIDE = 24
-        private const val FULL_FRAME_EXPLICIT_THRESHOLD = 0.94f
         private const val PERSON_EXPLICIT_THRESHOLD = 0.82f
         private const val SCREEN_TILE_EXPLICIT_THRESHOLD = 0.90f
         private const val MAX_SCREEN_TILES = 9

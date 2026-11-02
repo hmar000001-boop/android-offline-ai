@@ -75,14 +75,15 @@ A model can still be inaccurate or malicious despite a valid hash. The catalog i
 
 ## Protection and failure behavior
 
-1. Window, scroll and content-change events invalidate stale geometry.
-2. The previous detailed overlay is replaced by an opaque cover while a fresh capture is analysed.
-3. A single worker runs the selected inference pipeline; results with an older generation/sequence are discarded.
-4. Invalid outputs, capture errors and inference failures use an opaque fallback when Android allows the overlay to be drawn.
-5. After repeated model errors, expensive inference attempts stop but the fallback cover remains until the user explicitly stops/restarts protection.
-6. The app reports model inference time separately from capture-request-to-overlay-commit time.
+1. Protection defaults OFF. Enabling Accessibility never starts it; the user must return to ScreenVeil and tap Start protection.
+2. Startup and model loading never place a full-window cover. The first successful analysis may add localized masks.
+3. Window, scroll and content-change events clear stale localized geometry and debounce a fresh screenshot; they never replace it with a full-window obstruction.
+4. A single worker runs the selected inference pipeline; results with an older generation/sequence are discarded.
+5. Invalid local boxes are skipped. Model initialization, repeated model/capture failures and overlay rendering failures pause protection and clear the overlay. Capture failures get at most five consecutive retries; inference failures get at most three.
+6. The technical failure policy never leaves a full-window fallback on screen. This intentionally prioritizes device usability over fail-closed masking during startup or failure; content can be temporarily visible while analysis is pending or after protection pauses.
+7. The app reports model inference time separately from capture-request-to-overlay-commit time.
 
-Opaque fallback reduces exposure during technical failures but cannot protect content that a model incorrectly classifies as safe or fails to locate. The service samples screenshots; it is not a 30-FPS video filter. The default screenshot interval is 1.5 seconds, with a configurable minimum of 0.75 seconds. Content can change between samples and may be briefly visible before the app receives a useful accessibility event and applies the cover.
+The service samples screenshots; it is not a 30-FPS video filter. The default screenshot interval is 1.5 seconds, with a configurable minimum of 0.75 seconds. Content can change between samples and may be briefly visible before the app receives a useful accessibility event and applies a localized mask.
 
 ## Build
 
@@ -104,3 +105,8 @@ The source archive includes tests for model-catalog policy, profiles, parser val
 - Model files and temporary frames are stored in private app storage/cache; temporary frames are deleted after inference.
 - The user controls the Accessibility permission and protection start/stop state.
 - No analytics, telemetry or screenshot-upload endpoint is implemented.
+
+
+## Critical safety lifecycle update (1.5.0)
+
+Protection now defaults OFF and requires a separate Start tap after Accessibility is enabled. Startup, window changes, and technical failures do not place a full-window grey/opaque cover. Model initialization failure, repeated inference/capture failure, or overlay failure pauses protection and clears the overlay. See `docs/CRITICAL_SAFETY_HOTFIX.md`. Automated Android/emulator tests are intentionally pending.

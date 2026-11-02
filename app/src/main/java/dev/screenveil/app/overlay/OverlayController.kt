@@ -74,11 +74,9 @@ class OverlayController(
                     height
                 )
                 if (mapped == null) {
-                    // Coordinates that cannot be mapped are not safe to ignore. A full-window
-                    // opaque fallback is preferable to revealing content due to bad geometry.
-                    canvas.drawColor(OPAQUE_FALLBACK)
-                    completed = selected.size
-                    break
+                    // Reject this region only. Bad model coordinates must never turn into a
+                    // full-window obstruction; the geometry diagnostic is handled by the caller.
+                    continue
                 }
                 val source = mapped.source
                 val target = mapped.destination
@@ -124,37 +122,14 @@ class OverlayController(
             }
 
             if (completed == 0) {
-                // Defensive fail-closed path. A non-empty selected list must never turn into a
-                // null overlay merely because all boxes were invalid or unmappable.
-                canvas.drawColor(OPAQUE_FALLBACK)
-                completed = selected.size
+                // No valid local region remains. Do not manufacture a full-window mask.
+                if (!composed.isRecycled) composed.recycle()
+                return null
             }
             return PreparedOverlay(composed, Rect(screenBounds), completed)
         } catch (error: Throwable) {
             if (!composed.isRecycled) composed.recycle()
             throw error
-        }
-    }
-
-    /**
-     * Replaces any detailed masks with a single opaque cover. The 1x1 source bitmap is stretched
-     * to the active application window, avoiding a full-resolution allocation on the UI thread.
-     * Must be called on the main thread.
-     */
-    fun showOpaque(bounds: Rect): Boolean {
-        if (bounds.width() <= 0 || bounds.height() <= 0) return false
-        val bitmap = try {
-            Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
-                eraseColor(OPAQUE_FALLBACK)
-            }
-        } catch (_: Throwable) {
-            return false
-        }
-        return try {
-            showPrepared(PreparedOverlay(bitmap, Rect(bounds), 1))
-        } catch (_: Throwable) {
-            recycle(bitmap)
-            false
         }
     }
 

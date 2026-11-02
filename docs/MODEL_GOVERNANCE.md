@@ -53,7 +53,7 @@ The app expects RGB float32 NCHW `[1,3,384,384]`, direct 384×384 resize and per
 
 ### Conservative decision policy
 
-Both general NSFW classifiers inspect the full screenshot; a high configured score can cause a full-frame redaction. The app then detects people and evaluates each person crop. If the general NSFW score does not cross the explicit threshold, the person crop is `UNCERTAIN`, not `ALLOW`, because no approved clothing classifier is present. The default **Redact uncertain content** setting covers these boxes. This can mask ordinary people and is a conservative trade-off, not swimwear classification.
+The app detects people and evaluates each person crop with the general NSFW classifiers. It does not use a whole-screen NSFW score to redact the entire application window. If the general NSFW score does not cross the explicit threshold, the person crop is `UNCERTAIN`, not `ALLOW`, because no approved clothing classifier is present. The default **Redact uncertain content** setting covers these boxes. This can mask ordinary people and is a conservative trade-off, not swimwear classification.
 
 Balanced additionally scans up to nine overlapping tiles with the ViT only when EfficientDet returns no people. If people are detected, the tile fallback is not run; unrelated media outside those boxes may be missed. Fast has no tile fallback. Thresholds are engineering starting values and are not calibrated or benchmarked for this product.
 

@@ -75,3 +75,8 @@ Google's Kaggle-published SSD MobileNet V2 Open Images V4 model documents 600 ou
 ## CI follow-up — 2026-11-02
 
 The user's GitHub Actions log reached `:app:compileDebugKotlin` and reported one Kotlin diagnostic: `ObjectDetector.createFromFileAndOptions` expected a `String` model path but received a `File`. Corrected the call to pass `personFile.absolutePath`. This is a source-level correction; the replacement archive still requires a fresh GitHub Actions run for full Gradle, unit-test, lint, and APK verification.
+
+
+## Critical usability/safety hotfix (1.5.1 / versionCode 7)
+
+Source now defaults protection OFF, requires an explicit Start tap after Accessibility is enabled, removes global opaque fallback paths, bounds capture/model retries, pauses and clears overlays after runtime failures, and disables specialist whole-screen scoring. See `CRITICAL_SAFETY_HOTFIX.md`. Per user request, Android emulator/instrumentation tests are deferred until the lifecycle changes are packaged; no Gradle build or device validation is claimed for this source revision.

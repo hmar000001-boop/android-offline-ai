@@ -23,16 +23,17 @@ This plan is mandatory before treating ScreenVeil as a practical daily-use filte
 4. In Balanced profile with no person boxes, verify all nine overlapping ViT tiles are evaluated and each positive tile is redacted as a whole region.
 5. With one or more person detections, verify the app does not silently run tile scanning; record any media outside person boxes that is missed.
 6. Verify a person region that is not flagged by the general NSFW classifiers remains `UNCERTAIN`, never `ALLOW`. With the default uncertain-redaction setting on, verify it is covered. Record false positives on ordinary people.
-7. Pass malformed dimensions, non-finite scores, unknown output names and ONNX errors. Confirm they trigger the opaque fallback rather than `ALLOW`.
+7. Pass malformed dimensions, non-finite scores, unknown output names and ONNX errors. Confirm bounded retries, visible error status, protection OFF and overlay cleared; never a full-window fallback.
 8. Confirm the Fast profile has no ViT runtime/file dependency and Balanced has all three specialist artifacts. Confirm neither specialist profile loads Gemma.
 
 ## Capture and window correctness
 
 1. Test portrait/landscape, status/navigation bars, edge-to-edge app content, split screen, floating windows, popups and dialogs.
 2. Test scroll, rapid feed replacements and window changes while inference runs. Confirm stale generations and old capture sequences cannot overwrite the latest overlay.
-3. Test secure/DRM windows and screenshot rate limiting. Confirm Android restrictions are respected and the app uses the documented fallback.
-4. Force inference and overlay errors in a test build. Confirm the opaque cover remains; after three failures inference retries stop until explicit Stop → Start.
-5. Measure whether the cover is shown quickly enough after a notified event. The opaque cover improves failure behavior but does not make Android screenshot redaction instantaneous.
+3. Test secure/DRM windows and screenshot rate limiting. Confirm Android restrictions are respected, localized masks are not replaced by a global cover and repeated capture errors pause protection.
+4. Force inference and overlay errors in a test build. Confirm the service pauses after three model failures, clears the overlay and leaves the app usable.
+5. Verify startup, service rebind and enabling Accessibility never start protection without an explicit Start tap. Confirm model loading never draws a full-window cover.
+6. Confirm content changes clear only localized masks and schedule a new capture; repeated events must never create a global cover.
 
 ## Representative moderation dataset
 

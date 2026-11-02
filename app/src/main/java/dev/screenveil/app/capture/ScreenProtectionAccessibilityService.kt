@@ -29,6 +29,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * ScreenVeil's capture lifecycle is owned by Android's AccessibilityService lifecycle.
@@ -55,6 +56,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private val inferenceInFlight = AtomicBoolean(false)
     private val redactionInFlight = AtomicBoolean(false)
     private val captureRequestedWhileBusy = AtomicBoolean(false)
+    private val consecutiveCaptureFailures = AtomicInteger(0)
     private val modelInitializationStarted = AtomicBoolean(false)
     private val maskGeneration = AtomicLong(0L)
     private val captureSequence = AtomicLong(0L)
@@ -70,7 +72,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     @Volatile private var activeRedactions: List<DetectedMediaRegion> = emptyList()
     @Volatile private var activeMediaRegionCount: Int = 0
     @Volatile private var currentForegroundPackage: String? = null
-    @Volatile private var lastKnownScreenBounds: Rect? = null
+    // Main-thread guard: only the first content-change event in a debounce burst clears masks.
+    private var contentChangeBurstPending = false
 
     // Engine and Conversation APIs are confined to inferenceExecutor.
     private var detector: ScreenContentDetector? = null
@@ -93,6 +96,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     }
 
     private val debouncedCapture = Runnable {
+        contentChangeBurstPending = false
         if (monitoringRequested && modelReady && !destroyed) requestScreenshot()
     }
     // One reusable retry callback prevents event storms or repeated rate-limit errors from
@@ -126,6 +130,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
 
+        // Always clear any persisted ON request before evaluating runtime capability.
+        preferences.setProtectionEnabled(false)
+        monitoringRequested = false
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ProtectionStatus.update(
                 ProtectionStatus.State(
@@ -137,16 +145,16 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (preferences.isProtectionEnabled()) {
-            startProtection()
-        } else {
-            ProtectionStatus.update(
-                ProtectionStatus.State(
-                    active = false,
-                    message = "Accessibility service enabled · protection is paused"
-                )
+        // A service bind/rebind must never start screen coverage by itself. Require a fresh
+        // Start tap in the app, even if an older release persisted an enabled flag.
+        overlay?.clear()
+        ProtectionStatus.update(
+            ProtectionStatus.State(
+                active = false,
+                opaqueCoverActive = false,
+                message = "Accessibility service enabled · protection is OFF. Tap Start protection when ready."
             )
-        }
+        )
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -161,29 +169,33 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (!modelReady) {
-            coverMasks("${activeProfileName} is loading or unavailable · application window remains covered")
+            ProtectionStatus.setMessage("${activeProfileName} is loading or unavailable · screen remains visible; protection will pause on error")
             return
         }
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                // Keep protection continuously present: the old geometry is not safe to reuse
-                // after a window switch, so replace it with an opaque cover until fresh analysis.
-                coverMasks("Application changed · covered while checking the new screen")
+                contentChangeBurstPending = false
+                // Old coordinates belong to the previous application window. Remove only our
+                // localized masks; never replace them with a full-window obstruction.
+                clearMasks()
                 scheduleDebouncedCapture(WINDOW_CHANGE_DEBOUNCE_MS)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                // Scrolling changes the pixel-to-content mapping. An opaque temporary cover is
-                // the only fail-closed choice without app-specific scroll/vision tracking.
-                coverMasks("Screen moved · covered while refreshing redaction")
+                contentChangeBurstPending = false
+                // Scrolling changes coordinate mapping. Clear stale localized masks while the
+                // debounced screenshot is analyzed; do not block the entire application window.
+                clearMasks()
                 scheduleDebouncedCapture(SCROLL_DEBOUNCE_MS)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // Accessibility metadata cannot reliably distinguish text updates from media
-                // replacement/reflow. Conservatively invalidate the old geometry on every
-                // content-change event and cover until a fresh screen analysis is committed.
-                coverMasks("Screen content changed · covered while refreshing redaction")
+                // Reflow may invalidate old rectangles. Clear masks once per event burst, not on
+                // every accessibility notification, then debounce one fresh screenshot.
+                if (!contentChangeBurstPending) {
+                    contentChangeBurstPending = true
+                    clearMasks()
+                }
                 scheduleDebouncedCapture(CONTENT_CHANGE_DEBOUNCE_MS)
             }
         }
@@ -195,10 +207,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (monitoringRequested && !destroyed) {
-            // An accessibility interruption is not the user's request to disable protection.
-            // Retain an opaque cover rather than clearing the last masks.
-            coverMasks("Accessibility service interrupted · screen covered until inspection resumes")
-            if (modelReady) scheduleRetry(RETRY_AFTER_ANALYSIS_FAILURE_MS)
+            // An interruption is a technical failure, not permission to lock the user's screen.
+            stopForSafety("Protection paused because Android interrupted the Accessibility service", "Accessibility interruption")
         }
     }
 
@@ -210,28 +220,24 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         if (!connected || destroyed) return
         val requestedProfile = preferences.getModelProfile()
         if (!ModelInstaller.hasProfileMarkers(this, requestedProfile)) {
+            modelReady = false
             val missing = requestedProfile.requiredModels
                 .filterNot { ModelInstaller.hasVerifiedMarker(this, it) }
                 .joinToString { it.displayName }
-            ProtectionStatus.update(
-                ProtectionStatus.State(
-                    active = false,
-                    modelReady = false,
-                    message = "Install and verify all models for ${requestedProfile.title}",
-                    error = "Missing model files: $missing"
-                )
-            )
+            stopForSafety("Protection was not started because model files are missing. The screen is visible.", "Missing model files: $missing")
             return
         }
 
         activeProfileName = requestedProfile.title
         monitoringRequested = true
         preferences.setProtectionEnabled(true)
+        consecutiveCaptureFailures.set(0)
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = true,
                 modelReady = modelReady,
-                message = if (modelReady) "Starting screen inspection…" else "${requestedProfile.title} is loading · external app windows are covered until the first valid analysis"
+                opaqueCoverActive = false,
+                message = if (modelReady) "Starting screen inspection…" else "${requestedProfile.title} is loading · screen remains visible until localized analysis is ready"
             )
         )
 
@@ -241,9 +247,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             // Switching profiles invalidates the previous runtime. Close/recreate it on the single
             // inference executor so Gemma cannot accidentally continue behind a specialist label.
             modelReady = false
-            if (currentForegroundPackage != packageName) {
-                coverMasks("${requestedProfile.title} is loading · screen covered until protection is ready")
-            }
+            clearMasks()
             if (modelInitializationStarted.compareAndSet(false, true)) initializeModel(requestedProfile)
         }
     }
@@ -260,6 +264,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(periodicCapture)
         mainHandler.removeCallbacks(debouncedCapture)
         mainHandler.removeCallbacks(retryCapture)
+        contentChangeBurstPending = false
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
         maskGeneration.incrementAndGet()
@@ -277,6 +282,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private fun initializeModel(profile: ModelProfile) {
         try {
             inferenceExecutor.execute {
+                var candidateForCleanup: ScreenContentDetector? = null
                 try {
                     runCatching { detector?.close() }
                     detector = null
@@ -297,12 +303,15 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                         ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector(this)
                         ModelProfile.SWIMWEAR_AWARE -> error("Swimwear-aware model has not passed Android artifact approval")
                     }
+                    candidateForCleanup = created
                     created.initialize(files)
                     if (destroyed) {
                         created.close()
+                        candidateForCleanup = null
                         return@execute
                     }
                     detector = created
+                    candidateForCleanup = null
                     loadedProfile = profile
                     consecutiveModelFailures = 0
                     modelReady = true
@@ -320,6 +329,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                         }
                     }
                 } catch (error: Throwable) {
+                    runCatching { candidateForCleanup?.close() }
                     runCatching { detector?.close() }
                     detector = null
                     loadedProfile = null
@@ -328,18 +338,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     val detail = error.message ?: error.javaClass.simpleName
                     mainHandler.post {
                         if (!destroyed && monitoringRequested) {
-                            // Do not silently disable protection after a model-load failure. Keep
-                            // the opaque window cover in place and let the user open ScreenVeil
-                            // to retry or explicitly stop protection.
-                            coverMasks("${profile.title} could not be loaded · application window remains covered")
-                            ProtectionStatus.update(ProtectionStatus.state.value.copy(error = detail, modelReady = false))
+                            stopForSafety("Protection paused because ${profile.title} could not be loaded. The screen is visible.", detail)
                         }
                     }
                 }
             }
         } catch (_: RejectedExecutionException) {
             modelInitializationStarted.set(false)
-            ProtectionStatus.setMessage("Could not start the ${profile.title} worker")
+            stopForSafety("Protection paused because the ${profile.title} worker could not start. The screen is visible.", "Inference worker rejected model initialization")
         }
     }
 
@@ -356,11 +362,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 lastInferenceMs = lastInferenceMs
             )
         )
-        if (currentForegroundPackage != packageName) {
-            coverMasks("Protection starting · covering the screen until its first analysis")
-        } else {
-            clearMasks()
-        }
+        // No opaque startup cover: the first valid analysis will add only localized masks.
+        clearMasks()
         requestScreenshot()
         mainHandler.postDelayed(periodicCapture, preferences.getSettings().frameIntervalMs)
     }
@@ -429,8 +432,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         } catch (error: Throwable) {
             finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration != maskGeneration.get() || destroyed) return
-            failClosedAndRetry(
-                "Could not identify the active application window · display covered while retrying",
+            handleCaptureFailure(
+                "Could not identify the active application window · retrying without blocking the screen",
                 error.message ?: error.javaClass.simpleName,
                 captureGeneration
             )
@@ -450,7 +453,6 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
 
-        lastKnownScreenBounds = Rect(target.screenBounds)
         lastScreenshotAt = now
         try {
             takeScreenshotOfWindow(
@@ -469,11 +471,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             } finally {
                                 hardwareBitmap.recycle()
                             }
+                            consecutiveCaptureFailures.set(0)
                             dispatchFrame(frame, target.screenBounds, captureGeneration, requestSequence, now)
                         } catch (error: Throwable) {
                             if (captureGeneration == maskGeneration.get() && !destroyed) {
-                                failClosedAndRetry(
-                                    "Screenshot processing failed · app window covered while retrying",
+                                handleCaptureFailure(
+                                    "Screenshot processing failed · retrying without blocking the screen",
                                     error.message ?: error.javaClass.simpleName,
                                     captureGeneration
                                 )
@@ -512,7 +515,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                                 )
                             )
                         } else {
-                            failClosedAndRetry(detail, detail, captureGeneration)
+                            handleCaptureFailure(detail, detail, captureGeneration)
                         }
                     }
                 }
@@ -520,8 +523,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         } catch (error: Throwable) {
             finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration == maskGeneration.get() && !destroyed) {
-                failClosedAndRetry(
-                    "Android screenshot request failed · app window covered while retrying",
+                handleCaptureFailure(
+                    "Android screenshot request failed · retrying without blocking the screen",
                     error.message ?: error.javaClass.simpleName,
                     captureGeneration
                 )
@@ -592,7 +595,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
                     if (!result.parseSucceeded) {
                         recordModelFailure(
-                            "${activeProfileName} returned an invalid result · app window covered",
+                            "${activeProfileName} returned an invalid result · retrying without blocking the screen",
                             result.diagnostic,
                             captureGeneration
                         )
@@ -617,7 +620,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 } catch (error: Throwable) {
                     if (!destroyed && monitoringRequested && captureGeneration == maskGeneration.get()) {
                         recordModelFailure(
-                            "${activeProfileName} inference failed · app window covered",
+                            "${activeProfileName} inference failed · retrying without blocking the screen",
                             error.message ?: error.javaClass.simpleName,
                             captureGeneration
                         )
@@ -666,8 +669,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
                 } catch (error: Throwable) {
                     if (!destroyed && monitoringRequested && generation == maskGeneration.get()) {
-                        failClosedAndRetry(
-                            "Redaction refresh failed · app window covered while retrying",
+                        handleCaptureFailure(
+                            "Redaction refresh failed · retrying without blocking the screen",
                             error.message ?: error.javaClass.simpleName,
                             generation
                         )
@@ -697,30 +700,20 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             if (!destroyed && monitoringRequested && generation == maskGeneration.get() &&
                 requestSequence >= lastAppliedCaptureSequence
             ) {
+                val renderedRegionCount = prepared?.redactedRegions ?: 0
+                if (redactedCount > 0 && renderedRegionCount != redactedCount) {
+                    stopForSafety(
+                        "Protection paused because one or more redaction boxes could not be mapped. The screen is visible.",
+                        "Model requested $redactedCount redactions, but only $renderedRegionCount valid local boxes could be rendered"
+                    )
+                    return@post
+                }
                 val shown = overlay?.showPrepared(prepared) == true
                 if (!shown) {
-                    val bounds = prepared?.screenBounds ?: lastKnownScreenBounds ?: fullDisplayBounds()
-                    if (overlay?.showOpaque(bounds) != true) {
-                        ProtectionStatus.update(
-                            ProtectionStatus.State(
-                                active = true,
-                                modelReady = modelReady,
-                                opaqueCoverActive = false,
-                                message = "CRITICAL: redaction overlay could not be displayed",
-                                error = "The detailed overlay and opaque fallback both failed"
-                            )
-                        )
-                    } else {
-                        ProtectionStatus.update(
-                            ProtectionStatus.State(
-                                active = true,
-                                modelReady = modelReady,
-                                opaqueCoverActive = true,
-                                message = "Screen covered because the redaction overlay failed",
-                                error = "Detailed redaction could not be displayed; opaque fallback is active"
-                            )
-                        )
-                    }
+                    // A failed renderer must stop protection, never replace the app with a
+                    // full-window grey cover. The user's device remains operable.
+                    prepared?.bitmap?.let { if (!it.isRecycled) it.recycle() }
+                    stopForSafety("Protection paused because the redaction overlay could not be updated. The screen is visible.", "Overlay rendering failed")
                     return@post
                 }
                 lastAppliedCaptureSequence = requestSequence
@@ -740,7 +733,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             else -> "Monitoring · ${activeProfileName}: redacted $redactedCount of $detectedCount media region(s)"
                         },
                         regionsDetected = detectedCount,
-                        regionsRedacted = redactedCount,
+                        regionsRedacted = prepared?.redactedRegions ?: 0,
                         lastInferenceMs = inferenceMs,
                         lastEndToEndMs = (SystemClock.elapsedRealtime() - captureRequestedAtMs).coerceAtLeast(0L)
                     )
@@ -752,42 +745,26 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Invalidate all old coordinates and synchronously place an opaque cover on the active app
-     * window. This deliberately trades temporary visibility/usability for privacy during reflow.
-     */
-    private fun coverMasks(message: String) {
-        activeRedactions = emptyList()
-        activeMediaRegionCount = 0
-        val generation = maskGeneration.incrementAndGet()
-        val applyCover = Runnable {
-            if (!destroyed && generation == maskGeneration.get()) {
-                val bounds = runCatching { findScreenshotTarget()?.screenBounds }
-                    .getOrNull() ?: fullDisplayBounds()
-                lastKnownScreenBounds = Rect(bounds)
-                val covered = overlay?.showOpaque(bounds) == true
-                ProtectionStatus.update(
-                    ProtectionStatus.State(
-                        active = monitoringRequested,
-                        modelReady = modelReady,
-                        opaqueCoverActive = covered,
-                        message = if (covered) message else "Protection could not display its temporary opaque cover",
-                        error = if (covered) null else "Accessibility overlay update failed"
-                    )
-                )
-            }
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) applyCover.run() else mainHandler.post(applyCover)
-    }
-
-    /**
-     * Repeated model failures stop expensive inference attempts but never remove the opaque
-     * fallback. A user can explicitly stop and restart protection to retry model initialization.
-     * This circuit breaker is confined to inferenceExecutor.
+     * Model failures are bounded. Keep the last localized overlay while retrying briefly, then
+     * stop protection and clear it. Never retain an opaque whole-window fallback.
      */
     private fun recordModelFailure(message: String, detail: String?, generation: Long) {
         consecutiveModelFailures++
         if (consecutiveModelFailures < MAX_CONSECUTIVE_MODEL_FAILURES) {
-            failClosedAndRetry(message, detail, generation)
+            mainHandler.post {
+                if (!destroyed && monitoringRequested && generation == maskGeneration.get()) {
+                    ProtectionStatus.update(
+                        ProtectionStatus.state.value.copy(
+                            active = true,
+                            modelReady = true,
+                            opaqueCoverActive = false,
+                            message = "$message · retry ${consecutiveModelFailures}/${MAX_CONSECUTIVE_MODEL_FAILURES}",
+                            error = detail
+                        )
+                    )
+                    scheduleRetry(RETRY_AFTER_ANALYSIS_FAILURE_MS)
+                }
+            }
             return
         }
 
@@ -799,57 +776,66 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         modelInitializationStarted.set(false)
         mainHandler.post {
             if (destroyed || !monitoringRequested) return@post
-            mainHandler.removeCallbacks(periodicCapture)
-            mainHandler.removeCallbacks(debouncedCapture)
-            mainHandler.removeCallbacks(retryCapture)
-            coverMasks("${activeProfileName} failed repeatedly · screen remains covered. Stop and restart protection to retry.")
-            val coveredStatus = ProtectionStatus.state.value
-            ProtectionStatus.update(
-                coveredStatus.copy(
-                    active = true,
-                    modelReady = false,
-                    error = detail ?: coveredStatus.error ?: "${activeProfileName} failed repeatedly",
-                    message = if (coveredStatus.opaqueCoverActive) {
-                        "Model recovery required · opaque screen cover retained"
-                    } else {
-                        "CRITICAL: model recovery required · opaque cover could not be displayed"
-                    }
-                )
-            )
+            stopForSafety("Protection paused after repeated model errors. The screen is visible.", detail ?: "${activeProfileName} failed repeatedly")
         }
     }
 
-    /** Invalid model/capture results never disable monitoring or remove protection. */
-    private fun failClosedAndRetry(message: String, detail: String?, generation: Long) {
+    /**
+     * Capture/processing failures preserve the last localized masks for a few retries. Repeated
+     * failures stop protection and clear the overlay. A technical failure never blacks out the UI.
+     */
+    private fun handleCaptureFailure(message: String, detail: String?, generation: Long) {
+        val failures = consecutiveCaptureFailures.incrementAndGet()
         mainHandler.post {
             if (destroyed || !monitoringRequested || generation != maskGeneration.get()) return@post
-            val bounds = runCatching { findScreenshotTarget()?.screenBounds }.getOrNull()
-                ?: lastKnownScreenBounds ?: fullDisplayBounds()
-            lastKnownScreenBounds = Rect(bounds)
-            val covered = overlay?.showOpaque(bounds) == true
+            if (failures >= MAX_CONSECUTIVE_CAPTURE_FAILURES) {
+                stopForSafety("Protection paused after repeated screen-capture errors. The screen is visible.", detail ?: message)
+                return@post
+            }
             ProtectionStatus.update(
-                ProtectionStatus.State(
+                ProtectionStatus.state.value.copy(
                     active = true,
                     modelReady = modelReady,
-                    opaqueCoverActive = covered,
-                    message = if (covered) message else "CRITICAL: redaction overlay unavailable",
-                    error = detail ?: if (covered) null else "Opaque fallback overlay failed",
+                    opaqueCoverActive = false,
+                    message = "$message · retry $failures/$MAX_CONSECUTIVE_CAPTURE_FAILURES",
+                    error = detail,
                     regionsDetected = activeMediaRegionCount,
-                    regionsRedacted = if (covered) 1 else activeRedactions.size,
+                    regionsRedacted = activeRedactions.size,
                     lastInferenceMs = lastInferenceMs
                 )
             )
-            if (covered) scheduleRetry(RETRY_AFTER_ANALYSIS_FAILURE_MS)
+            scheduleRetry(RETRY_AFTER_ANALYSIS_FAILURE_MS)
         }
     }
 
-    private fun fullDisplayBounds(): Rect {
-        val metrics = android.util.DisplayMetrics()
-        @Suppress("DEPRECATION")
-        val display = (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay
-        @Suppress("DEPRECATION")
-        display.getRealMetrics(metrics)
-        return Rect(0, 0, metrics.widthPixels.coerceAtLeast(1), metrics.heightPixels.coerceAtLeast(1))
+    /** Central, idempotent emergency stop used by every unrecoverable runtime failure. */
+    private fun stopForSafety(message: String, detail: String? = null) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { stopForSafety(message, detail) }
+            return
+        }
+        monitoringRequested = false
+        captureRequestedWhileBusy.set(false)
+        captureRequestedAfterScreenshot.set(false)
+        preferences.setProtectionEnabled(false)
+        mainHandler.removeCallbacks(periodicCapture)
+        mainHandler.removeCallbacks(debouncedCapture)
+        mainHandler.removeCallbacks(retryCapture)
+        contentChangeBurstPending = false
+        activeRedactions = emptyList()
+        activeMediaRegionCount = 0
+        consecutiveCaptureFailures.set(0)
+        maskGeneration.incrementAndGet()
+        overlay?.clear()
+        ProtectionStatus.update(
+            ProtectionStatus.State(
+                active = false,
+                modelReady = modelReady,
+                opaqueCoverActive = false,
+                message = message,
+                error = detail
+            )
+        )
     }
 
     private fun clearMasks() {
@@ -888,12 +874,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         destroyed = true
         connected = false
         monitoringRequested = false
+        runCatching { preferences.setProtectionEnabled(false) }
         captureRequestedWhileBusy.set(false)
         captureRequestedAfterScreenshot.set(false)
         modelReady = false
         mainHandler.removeCallbacks(periodicCapture)
         mainHandler.removeCallbacks(debouncedCapture)
         mainHandler.removeCallbacks(retryCapture)
+        contentChangeBurstPending = false
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
         maskGeneration.incrementAndGet()
@@ -923,6 +911,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         private const val SCREENSHOT_RATE_LIMIT_RETRY_MS = 700L
         private const val RETRY_AFTER_ANALYSIS_FAILURE_MS = 900L
         private const val MAX_CONSECUTIVE_MODEL_FAILURES = 3
+        private const val MAX_CONSECUTIVE_CAPTURE_FAILURES = 5
 
         @Volatile private var currentInstance: ScreenProtectionAccessibilityService? = null
 

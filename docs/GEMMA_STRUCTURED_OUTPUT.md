@@ -11,7 +11,7 @@ The current Kotlin detector:
 3. Disables speculative decoding before constructing the engine (`ExperimentalFlags.enableSpeculativeDecoding = false`) and in the conversation configuration.
 4. Passes `ResponseFormat.json(RESPONSE_SCHEMA)` to `Conversation.sendMessage`.
 5. Extracts `Content.Text.text` parts from `Message.contents.contents`.
-6. Parses and validates the JSON independently in Kotlin. Invalid responses are never treated as “no media” or “safe”: the service replaces detailed redactions with an opaque application-window cover and retries without turning off the protection setting. After three consecutive model/structured-output failures, a circuit breaker stops further expensive inference attempts, retains the opaque cover, and requires an explicit Stop → Start cycle to retry model initialization.
+6. Parses and validates the JSON independently in Kotlin. Invalid responses are not treated as “no media” or “safe”: the service retains only existing localized masks while retrying. After three consecutive model/structured-output failures, it pauses protection, clears the overlay and reports the error. Technical failures never create or retain a full-window cover.
 
 The schema constrains the response to a root object with `regions`; each region has a four-integer normalized `box`, `media_type`, and `decision`. Kotlin additionally checks coordinate range, order, minimum dimensions, a maximum of 24 regions and exact allowed values.
 
@@ -31,4 +31,4 @@ Constrained decoding helps enforce the JSON syntax and schema. It cannot guarant
 - returns pixel-accurate boxes;
 - responds quickly enough for a particular video.
 
-A valid response may still be visually wrong. In particular, a syntactically valid empty `regions` array or an incorrect `allow` decision clears the temporary opaque cover. The service cannot infer that such an answer is a visual false negative. The Galaxy S24 FE device-validation dataset and measured false-negative/false-positive rates remain mandatory release gates.
+A valid response may still be visually wrong. In particular, a syntactically valid empty `regions` array or an incorrect `allow` decision can leave media unredacted. The service cannot infer that such an answer is a visual false negative. The Galaxy S24 FE device-validation dataset and measured false-negative/false-positive rates remain mandatory release gates.

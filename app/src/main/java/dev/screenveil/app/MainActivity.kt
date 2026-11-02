@@ -88,12 +88,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Returning from Android Accessibility settings only refreshes permission state.
+        // Protection must always be started with a separate, explicit tap in this app.
         accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
-        if (accessibilityEnabled && AppPreferences(this).isProtectionEnabled()) {
-            // The service also starts itself from onServiceConnected. This covers the case where
-            // the user returns from Settings after enabling ScreenVeil.
-            ScreenProtectionAccessibilityService.requestStart()
-        }
     }
 
     private fun beginProtection() {
@@ -105,20 +102,24 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        AppPreferences(this).setProtectionEnabled(true)
         accessibilityEnabled = ScreenProtectionAccessibilityService.isAccessibilityEnabled(this)
         if (!accessibilityEnabled) {
+            // Do not persist an ON request before Android's Accessibility settings are opened.
+            // The user must return here and press Start after granting the service permission.
+            AppPreferences(this).setProtectionEnabled(false)
             openAccessibilitySettings()
             Toast.makeText(
                 this,
-                "Enable ScreenVeil under Installed apps in Accessibility settings. Protection starts automatically after it is enabled.",
+                "Enable ScreenVeil in Accessibility settings, return to ScreenVeil, then tap Start protection. Enabling Accessibility alone does not start protection.",
                 Toast.LENGTH_LONG
             ).show()
             return
         }
 
+        AppPreferences(this).setProtectionEnabled(true)
         if (!ScreenProtectionAccessibilityService.requestStart()) {
-            Toast.makeText(this, "Android is reconnecting the accessibility service. Return to ScreenVeil in a moment.", Toast.LENGTH_LONG).show()
+            AppPreferences(this).setProtectionEnabled(false)
+            Toast.makeText(this, "Android is reconnecting the accessibility service. Return to ScreenVeil and tap Start protection again.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -224,13 +225,6 @@ private fun ScreenVeilHome(
                     )
                 }
                 Text(protection.message, style = MaterialTheme.typography.bodyMedium)
-                if (protection.active && protection.opaqueCoverActive) {
-                    Text(
-                        "A conservative opaque cover is currently hiding the app window. Open ScreenVeil and pause protection to restore visibility if the cover does not clear.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
                 if (protection.lastInferenceMs != null) {
                     Text(
                         "AI inference: ${protection.lastInferenceMs} ms · capture-to-overlay: ${protection.lastEndToEndMs ?: "—"} ms · ${protection.regionsDetected} media region(s) detected · ${protection.regionsRedacted} redacted",
@@ -263,14 +257,14 @@ private fun ScreenVeilHome(
                 Text("One-time Android setup", fontWeight = FontWeight.SemiBold)
                 Text(
                     if (accessibilityEnabled) {
-                        "ScreenVeil is enabled in Android Accessibility. When protection is on, it checks the active app window automatically after screen changes. No screen-sharing or screen-recording session is started."
+                        "ScreenVeil is enabled in Android Accessibility. Protection remains OFF until you explicitly tap Start protection here. If Android interrupts capture or model processing fails repeatedly, ScreenVeil pauses and removes its overlay. No screen-recording session is started."
                     } else {
-                        "Enable ScreenVeil once in Android Settings → Accessibility → Installed apps. Android requires this manual approval. Afterward, when the verified model is installed and protection is on, ScreenVeil checks the active app window automatically."
+                        "Enable ScreenVeil in Android Settings → Accessibility → Installed apps. Then return here and tap Start protection. Enabling Accessibility alone never starts monitoring."
                     },
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    "ScreenVeil requests screenshots of the active application window and reads only accessibility event metadata plus window IDs and bounds needed to place redaction masks. It does not inspect view nodes, read app text, tap controls, or perform gestures.",
+                    "ScreenVeil requests screenshots of the active application window and reads only accessibility event metadata plus window IDs and bounds needed to place redaction masks. It does not inspect view nodes, read app text, tap controls, or perform gestures. Startup and technical failures never place a full-window cover; failures pause protection and clear the overlay.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -352,9 +346,8 @@ private fun ScreenVeilHome(
                                     installedModelIds = SpecializedModelCatalog.all
                                         .filter { ModelInstaller.hasVerifiedMarker(context, it) }.map { it.id }.toSet()
                                     downloadLabel = "All selected model artifacts passed SHA-256 verification."
-                                    if (accessibilityEnabled && preferences.isProtectionEnabled()) {
-                                        ScreenProtectionAccessibilityService.requestStart()
-                                    }
+                                    // Downloading models never starts protection. The user must explicitly
+                    // press Start protection after installation has completed.
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                     throw cancelled
                                 } catch (error: Exception) {
