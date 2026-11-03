@@ -23,6 +23,10 @@ The Java fixture handles `onNewIntent()` and reapplies or clears `FLAG_SECURE` b
 Static source inspection and shell checks can validate the command shape and diagnostics, but they do not establish Android Activity Manager behavior. Gradle compilation, API 34/API 36 instrumentation runs, and real Galaxy S24 FE validation must still be confirmed by CI and device testing. No emulator test pass is claimed by this source revision.
 
 
-## 2026-11-03 permission-preflight correction
+## 2026-11-03 permission-preflight history and V5 correction
 
-A later CI run failed before instrumentation with exit code 255 immediately after `Pre-granting POST_NOTIFICATIONS outside instrumentation...`. The cause was the invalid command `pm check-permission`. The verification subcommand belongs to `dumpsys package`, and its output is numeric (`0` granted, `-1` denied). Use `scripts/pregrant-notification-permission.sh`, which grants with `pm grant --user 0` and verifies with `dumpsys package check-permission`. A run failing at this preflight has not executed instrumentation and therefore provides no new evidence about the lifecycle test crash.
+V2 failed before instrumentation because it invoked the nonexistent `pm check-permission` command. V3 corrected the command but its exact source provenance was not established in the user's subsequent run. V4 moved the grant to ADB installation (`adb install -r -g`) and configured AGP `installation.installOptions` so `connectedDebugAndroidTest` receives `-g` during its own install.
+
+The user's API 34 V4 log then showed `adb install -r -g` returning `Success` and the detailed `User 0` -> `runtime permissions` block showing `android.permission.POST_NOTIFICATIONS: granted=true`. However, the separate `dumpsys package check-permission ... 0` query returned `-1`, causing V4's script to abort before AndroidJUnitRunner. This run did **not** execute instrumentation and does not diagnose the original lifecycle crash.
+
+V5 no longer treats the contradictory one-line query as authoritative. The host preflight records the detailed package dump and the one-line query as diagnostics, then proceeds when installation and package paths are valid. The decisive permission assertion remains `targetContext.checkSelfPermission(POST_NOTIFICATIONS)` in the instrumentation `@Before`, which runs after AGP's own connected-test APK installation. If AGP's install loses the grant, the instrumentation test reports the actual target-context permission value rather than aborting in a host-side parser.

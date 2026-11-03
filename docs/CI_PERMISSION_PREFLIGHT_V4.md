@@ -1,3 +1,5 @@
+> **Superseded by V5:** the API 34 run after V4 showed `adb install -r -g` success and `POST_NOTIFICATIONS: granted=true` in the detailed User 0 package dump, but the separate `dumpsys package check-permission` query returned `-1`. V4 incorrectly treated that contradictory one-line query as a hard failure. V5 records both views as diagnostics and leaves the decisive post-AGP-install check to the instrumentation target context.
+
 # ScreenVeil R6 — CI instrumentation permission fix V4
 
 Date: 2026-11-03

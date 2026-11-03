@@ -2,7 +2,7 @@
 # Invoked as one command by reactivecircus/android-emulator-runner.
 set -euo pipefail
 
-printf '%s\n' 'SCREENVEIL_CI_SOURCE_MARKER=R6_V4_AGP_INSTALL_GRANT'
+printf '%s\n' 'SCREENVEIL_CI_SOURCE_MARKER=R6_V5_PACKAGE_DUMP_DIAGNOSTIC'
 printf 'UTC=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf 'ANDROID_SERIAL=%s\n' "${ANDROID_SERIAL:-<unset>}"
 # Enable AGP install-time runtime-permission grants before every Gradle invocation,
@@ -43,7 +43,7 @@ if ! grep -q '^SCREENVEIL_GRADLE_INSTALL_OPTIONS=-g$' instrumentation-runtime-di
   FAILURE_DIR='build/emulator-preflight-failure'
   mkdir -p "$FAILURE_DIR"
   {
-    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V4_AGP_INSTALL_GRANT'
+    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V5_PACKAGE_DUMP_DIAGNOSTIC'
     echo 'SCREENVEIL_AGP_INSTALL_GRANT_HOOK=NOT_CONFIRMED'
     echo "UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     echo "DIAGNOSTIC_COMMAND_EXIT=$diagnostic_command_status"
@@ -72,11 +72,11 @@ if (( permission_command_status != 0 || permission_tee_status != 0 )); then
   FAILURE_DIR='build/emulator-preflight-failure'
   mkdir -p "$FAILURE_DIR"
   {
-    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V4_AGP_INSTALL_GRANT'
+    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V5_PACKAGE_DUMP_DIAGNOSTIC'
     echo "UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     echo "EMULATOR_SERIAL=${ANDROID_SERIAL:-unknown}"
     echo "ANDROID_API_LEVEL=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || true)"
-    echo "PERMISSION_COMMAND_EXIT=$permission_command_status"
+    echo "PERMISSION_PREFLIGHT_COMMAND_EXIT=$permission_command_status"
     echo "PERMISSION_TEE_EXIT=$permission_tee_status"
   } > "$FAILURE_DIR/summary.txt"
   adb logcat -b all -d -v threadtime > "$FAILURE_DIR/logcat-full.txt" 2>&1 || true
@@ -101,7 +101,7 @@ if (( gradle_status != 0 || tee_status != 0 )); then
   FAILURE_DIR='build/emulator-failure-diagnostics'
   mkdir -p "$FAILURE_DIR"
   {
-    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V4_AGP_INSTALL_GRANT'
+    echo 'SCREENVEIL_CI_SOURCE_MARKER=R6_V5_PACKAGE_DUMP_DIAGNOSTIC'
     echo "UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     echo "EMULATOR_SERIAL=${ANDROID_SERIAL:-unknown}"
     echo "ANDROID_API_LEVEL=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || true)"
@@ -113,7 +113,7 @@ if (( gradle_status != 0 || tee_status != 0 )); then
   adb logcat -b crash -d -v threadtime > "$FAILURE_DIR/logcat-crash-buffer.txt" 2>&1 || true
   adb shell dumpsys activity exit-info dev.screenveil.app > "$FAILURE_DIR/target-exit-info.txt" 2>&1 || true
   adb shell dumpsys activity exit-info dev.screenveil.app.test > "$FAILURE_DIR/test-exit-info.txt" 2>&1 || true
-  adb shell dumpsys package check-permission android.permission.POST_NOTIFICATIONS dev.screenveil.app 0 > "$FAILURE_DIR/notification-permission-state.txt" 2>&1 || true
+  adb shell dumpsys package check-permission android.permission.POST_NOTIFICATIONS dev.screenveil.app 0 > "$FAILURE_DIR/notification-permission-check-query-diagnostic.txt" 2>&1 || true
   adb shell dumpsys dropbox --print data_app_crash > "$FAILURE_DIR/dropbox-app-crash.txt" 2>&1 || true
   adb shell dumpsys dropbox --print data_app_native_crash > "$FAILURE_DIR/dropbox-native-crash.txt" 2>&1 || true
   grep -E -C 8 \

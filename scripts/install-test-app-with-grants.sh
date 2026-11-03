@@ -10,7 +10,7 @@ APK_PATH="${2:-app/build/outputs/apk/debug/app-debug.apk}"
 USER_ID="${ANDROID_USER_ID:-0}"
 PERMISSION="android.permission.POST_NOTIFICATIONS"
 
-printf '%s\n' 'SCREENVEIL_CI_PERMISSION_SETUP=R6_V4_ADB_INSTALL_GRANT'
+printf '%s\n' 'SCREENVEIL_CI_PERMISSION_SETUP=R6_V5_ADB_INSTALL_GRANT'
 printf 'UTC=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf 'PACKAGE=%s\nAPK=%s\nUSER_ID=%s\n' "$PACKAGE_NAME" "$APK_PATH" "$USER_ID"
 
@@ -107,24 +107,55 @@ if ! grep -q '^package:' <<<"$package_path"; then
 fi
 printf 'INSTALLED_PACKAGE_PATH=%s\n' "$(printf '%s' "$package_path" | tr '\r' ' ')"
 
-# Verify the actual per-user PackageManager permission state. AOSP DumpHelper documents:
-# dumpsys package check-permission <permission> <package> [<user>], returning 0 or -1.
+# Capture independent PackageManager permission views, but do not fail this host preflight on
+# the one-line `check-permission` result. The supplied API 34 run showed a contradiction:
+# `adb install -r -g` succeeded and the detailed User 0 runtime-permission record said
+# granted=true, while `dumpsys package check-permission ... 0` returned -1. Treat both as
+# diagnostics here. The definitive check is targetContext.checkSelfPermission() in the
+# instrumentation @Before, after AGP has completed its own connected-test APK installation.
 set +e
+package_dump="$("${ADB[@]}" shell dumpsys package "$PACKAGE_NAME" 2>&1)"
+dump_status=$?
 check_output="$("${ADB[@]}" shell dumpsys package check-permission "$PERMISSION" "$PACKAGE_NAME" "$USER_ID" 2>&1)"
 check_status=$?
+appops_output="$("${ADB[@]}" shell cmd appops get "$PACKAGE_NAME" POST_NOTIFICATION 2>&1)"
+appops_status=$?
 set -e
-normalized_check="$(printf '%s' "$check_output" | tr -d '\r[:space:]')"
-if (( check_status != 0 )) || [[ "$normalized_check" != '0' ]]; then
-  echo "ERROR: $PERMISSION is not verified as granted for $PACKAGE_NAME, user $USER_ID." >&2
-  echo "  command: adb -s $SERIAL shell dumpsys package check-permission $PERMISSION $PACKAGE_NAME $USER_ID" >&2
-  echo "  exit: $check_status" >&2
-  echo "  raw output: ${check_output:-<empty>}" >&2
-  echo '  package runtime-permission details:' >&2
-  "${ADB[@]}" shell dumpsys package "$PACKAGE_NAME" 2>&1 | grep -A 35 -B 5 -E 'requested permissions|runtime permissions|POST_NOTIFICATIONS|User 0:' >&2 || true
-  echo '  notification app-op details:' >&2
-  "${ADB[@]}" shell cmd appops get "$PACKAGE_NAME" POST_NOTIFICATION 2>&1 >&2 || true
-  exit 6
+
+if (( dump_status == 0 )) && awk -v wanted_user="$USER_ID" -v wanted_permission="$PERMISSION" '
+  $1 == "User" && $2 ~ /^[0-9]+:$/ {
+    current_user = $2
+    sub(/:$/, "", current_user)
+    in_wanted_user = (current_user == wanted_user)
+    in_runtime_permissions = 0
+    next
+  }
+  in_wanted_user && $1 == "runtime" && $2 == "permissions:" {
+    in_runtime_permissions = 1
+    next
+  }
+  in_wanted_user && in_runtime_permissions && $1 == wanted_permission ":" {
+    for (i = 2; i <= NF; i++) {
+      if ($i == "granted=true," || $i == "granted=true") granted = 1
+      if ($i == "granted=false," || $i == "granted=false") denied = 1
+    }
+  }
+  END { exit (granted && !denied) ? 0 : 1 }
+' <<<"$package_dump"; then
+  printf '%s\n' "PACKAGE_DUMP_RUNTIME_PERMISSION=GRANTED user=$USER_ID permission=$PERMISSION"
+else
+  printf '%s\n' "WARNING: PACKAGE_DUMP_RUNTIME_PERMISSION=NOT_CONFIRMED user=$USER_ID permission=$PERMISSION dump_exit=$dump_status"
 fi
+
+normalized_check="$(printf '%s' "$check_output" | tr -d '\r[:space:]')"
+if (( check_status == 0 )) && [[ "$normalized_check" == '0' ]]; then
+  printf '%s\n' 'PACKAGE_CHECK_PERMISSION_QUERY=GRANTED'
+else
+  printf '%s\n' "PACKAGE_CHECK_PERMISSION_QUERY=DISAGREES_OR_DENIED output=${normalized_check:-<empty>} exit=$check_status"
+fi
+printf '%s\n' "NOTIFICATION_APPOPS_DIAGNOSTIC_EXIT=$appops_status"
+printf '%s\n' "NOTIFICATION_APPOPS_DIAGNOSTIC=${appops_output:-<empty>}"
+printf '%s\n' 'SCREENVEIL_CI_PERMISSION_FINAL_CHECK=INSTRUMENTATION_TARGET_CONTEXT'
 
 test_package_path="$("${ADB[@]}" shell pm path dev.screenveil.app.test 2>&1 || true)"
 if ! grep -q '^package:' <<<"$test_package_path"; then
@@ -133,5 +164,5 @@ if ! grep -q '^package:' <<<"$test_package_path"; then
   exit 7
 fi
 printf 'INSTALLED_TEST_PACKAGE_PATH=%s\n' "$(printf '%s' "$test_package_path" | tr '\r' ' ')"
-printf '%s\n' "$PERMISSION is GRANTED (PackageManager result 0)."
-printf '%s\n' 'SCREENVEIL_CI_PERMISSION_SETUP_RESULT=PASS'
+printf '%s\n' "ADB install preflight completed; final $PERMISSION check will run inside instrumentation targetContext."
+printf '%s\n' 'SCREENVEIL_CI_PERMISSION_INSTALL_PREFLIGHT=PASS'
