@@ -81,14 +81,17 @@ class DetectionResponseParserTest {
         assertEquals(12, parsed.regions.size)
     }
 
-    @Test fun rejectsExcessiveMediaRegionsInsteadOfSilentlyTruncating() {
+    @Test fun excessiveMediaRegionsKeepTheMostSensitiveInsteadOfPausingProtection() {
+        // 1.5.2 behavior change: pausing protection (fail-open) on a dense gallery was worse than
+        // keeping the 24 most sensitive regions. The truncation is reported in the diagnostic.
         val regions = (0 until 25).joinToString(",") { index ->
             val left = index * 10
             "{\"box\":[$left,100,${left + 20},200],\"media_type\":\"image\",\"decision\":\"swimwear\"}"
         }
         val parsed = DetectionResponseParser.parse("{\"regions\":[$regions]}")
-        assertFalse(parsed.parseSucceeded)
-        assertTrue(parsed.regions.isEmpty())
+        assertTrue(parsed.parseSucceeded)
+        assertEquals(24, parsed.regions.size)
+        assertTrue(parsed.diagnostic!!.contains("kept the 24 most sensitive"))
     }
 
 }

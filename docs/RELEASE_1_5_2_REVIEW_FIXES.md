@@ -29,3 +29,4 @@ Not validated: no Gradle build, unit test or emulator run happened when these ch
 - The 0.25 / 0.82 thresholds, the 70% / 85% coverage limits and the 30 s dwell are not calibrated on a real device.
 - The system-panel detection assumes the shade is a focused `TYPE_SYSTEM` window covering 40% or more of the display; this needs device confirmation.
 - Release R8 keep rules are conservative but untested against the real runtimes.
+- 2026-11-03 CI: the unit test that asserted rejection of more than 24 regions was rewritten for the new keep-24-most-sensitive behavior.
