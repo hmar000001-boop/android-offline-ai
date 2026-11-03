@@ -18,7 +18,7 @@ The R6 instrumentation suite is configured for `connectedDebugAndroidTest` on An
 | `repeatedCaptureFailuresStopAndClearAnExistingOverlay` | Five capture failures stop protection and clear an existing overlay. |
 | `androidSecureWindowScreenshotDenialPausesWithoutOverlay` | A real `FLAG_SECURE` fixture causes Android screenshot denial; protection pauses without a fallback overlay. |
 | `overlayRenderingFailureStopsProtectionAndClearsRenderer` | Renderer failure stops protection and clears renderer state. |
-| `explicitStopWhileLocalizedOverlayIsVisibleRemovesItImmediately` | Explicit Stop removes a visible localized overlay. |
+| `explicitStopWhileLocalizedOverlayIsVisibleRemovesItImmediately` | Waits for completed model status, one redacted region and a committed overlay frame; isolates ambient accessibility events, waits for pipeline quiescence, then verifies explicit Stop clears the overlay. |
 | `accessibilityInterruptionStopsAndRemovesActiveOverlay` | Android `onInterrupt()` stops protection and removes the overlay. |
 | `disablingAccessibilityWhileOverlayIsVisibleRemovesTheOverlay` | Service disable/unbind clears a visible overlay. |
 | `fiveMinuteSessionWatchdogStopsAndClearsTheOverlayWithoutBeingExtendedByStart` | Debug-shortened session timer calls the same safety stop and removes the overlay; a repeated Start request cannot extend the original deadline; production setting is 300,000 ms. |
@@ -49,6 +49,6 @@ Unit tests cover policy limits and category exemptions (none), model profiles/ca
 - Galaxy S24 FE latency, RAM, GPU/CPU/NPU behavior, heat, thermal throttling or battery drain.
 - Recovery if Android's main process/looper itself is completely unresponsive.
 
-The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. A separate instrumentation test loads the exact pinned Google segmentation artifact and invokes the real TFLite Task Vision segmenter on a synthetic frame; this proves artifact/runtime/API plumbing, not segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R6 emulator suite must not be presented as a real-model accuracy test.
+The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. The explicit Stop lifecycle case also waits for a committed overlay frame and drains known pending work before stopping, following the deterministic gating pattern used in the earlier R5 failure correction. A separate instrumentation test loads the exact pinned Google segmentation artifact and invokes the real TFLite Task Vision segmenter on a synthetic frame; this proves artifact/runtime/API plumbing, not segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R6 emulator suite must not be presented as a real-model accuracy test.
 
 **R6 status at package creation:** 28 lifecycle instrumentation test methods plus 1 real-model segmenter test (29 total), and 58 unit test methods are present in source. Gradle execution on API 34 and API 36 is still required; this document does not claim they have passed.

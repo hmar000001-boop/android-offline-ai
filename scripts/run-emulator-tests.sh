@@ -39,6 +39,35 @@ set -e
 gradle_status="${test_status[0]:-1}"
 tee_status="${test_status[1]:-1}"
 
+if (( gradle_status != 0 || tee_status != 0 )); then
+  FAILURE_DIR="build/emulator-failure-diagnostics"
+  mkdir -p "$FAILURE_DIR"
+  {
+    echo "UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    echo "EMULATOR_SERIAL=${ANDROID_SERIAL:-unknown}"
+    echo "ANDROID_API_LEVEL=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || true)"
+    echo "DEVICE_BUILD=$(adb shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r' || true)"
+    echo "GRADLE_EXIT=$gradle_status"
+    echo "TEE_EXIT=$tee_status"
+  } > "$FAILURE_DIR/summary.txt"
+  adb logcat -b all -d -v threadtime > "$FAILURE_DIR/logcat-full.txt" 2>&1 || true
+  adb logcat -b crash -d -v threadtime > "$FAILURE_DIR/logcat-crash-buffer.txt" 2>&1 || true
+  adb shell dumpsys activity exit-info dev.screenveil.app > "$FAILURE_DIR/target-exit-info.txt" 2>&1 || true
+  adb shell dumpsys activity exit-info dev.screenveil.app.test > "$FAILURE_DIR/test-exit-info.txt" 2>&1 || true
+  adb shell dumpsys dropbox --print data_app_crash > "$FAILURE_DIR/dropbox-app-crash.txt" 2>&1 || true
+  adb shell dumpsys dropbox --print data_app_native_crash > "$FAILURE_DIR/dropbox-native-crash.txt" 2>&1 || true
+  grep -E -C 8 \
+    'FATAL EXCEPTION|Fatal signal|DEBUG  |AndroidRuntime|SIGSEGV|SIGABRT|Canvas: trying to use a recycled bitmap|ScreenProtectionAccessibilityService|ScreenVeil redaction|Instrumentation run failed|Process crashed' \
+    "$FAILURE_DIR/logcat-full.txt" > "$FAILURE_DIR/logcat-relevant.txt" || true
+  adb shell dumpsys activity processes > "$FAILURE_DIR/activity-processes.txt" 2>&1 || true
+  adb shell dumpsys window windows > "$FAILURE_DIR/window-windows.txt" 2>&1 || true
+  adb shell dumpsys accessibility > "$FAILURE_DIR/accessibility.txt" 2>&1 || true
+  adb shell dumpsys meminfo dev.screenveil.app > "$FAILURE_DIR/target-meminfo.txt" 2>&1 || true
+  adb shell dumpsys meminfo dev.screenveil.app.test > "$FAILURE_DIR/test-meminfo.txt" 2>&1 || true
+  adb shell pidof dev.screenveil.app > "$FAILURE_DIR/target-pid.txt" 2>&1 || true
+  adb shell pidof dev.screenveil.app.test > "$FAILURE_DIR/test-pid.txt" 2>&1 || true
+fi
+
 if (( gradle_status != 0 )); then
   exit "$gradle_status"
 fi

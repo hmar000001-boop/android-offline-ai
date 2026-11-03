@@ -8,12 +8,12 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
-import android.os.Handler
-import android.os.Looper
+import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
+import dev.screenveil.app.BuildConfig
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.policy.ModerationPolicy
 import dev.screenveil.app.policy.ModerationSettings
@@ -30,8 +30,6 @@ open class OverlayController(
     private val requiresDrawOverlaysPermission: Boolean = false
 ) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
-    private val mainHandler = Handler(Looper.getMainLooper())
-
     data class PreparedOverlay(
         val bitmap: Bitmap,
         val screenBounds: Rect,
@@ -41,7 +39,8 @@ open class OverlayController(
     )
 
     private var imageView: ImageView? = null
-    private var displayedBitmap: Bitmap? = null
+    @Volatile private var displayedFrameCommitted = false
+    @Volatile private var frameCommitGeneration = 0L
 
     /** CPU-heavy crop/effect work is safe on a worker; this method never touches WindowManager. */
     open fun prepare(
@@ -167,7 +166,11 @@ open class OverlayController(
         }
     }
 
-    /** Must be called on the main thread. `prepared` transfers bitmap ownership on success. */
+    /**
+     * Must be called on the main thread. Once passed here, callers must not mutate or recycle the
+     * prepared bitmap, even when this method returns false: a failure may occur after ImageView has
+     * accepted it, and the view/render thread may still hold a reference while it is detached.
+     */
     open fun showPrepared(prepared: PreparedOverlay?): Boolean {
         if (prepared == null) {
             clear()
@@ -192,28 +195,32 @@ open class OverlayController(
             return try {
                 windowManager.addView(newView, params)
                 imageView = newView
-                displayedBitmap = prepared.bitmap
+                if (BuildConfig.DEBUG) trackFrameCommit(newView)
                 true
             } catch (_: Throwable) {
-                runCatching { windowManager.removeView(newView) }
+                // This bitmap was handed to an ImageView. Even if addView/update failed partway
+                // through, the renderer may still hold a reference. Invalidate any queued frame
+                // callback, detach the drawable and let GC reclaim the bitmap after HWUI releases it.
+                if (imageView === newView) imageView = null
+                frameCommitGeneration += 1L
+                displayedFrameCommitted = false
                 newView.setImageDrawable(null)
-                recycle(prepared.bitmap)
+                runCatching { windowManager.removeView(newView) }
                 false
             }
         }
 
-        val oldBitmap = displayedBitmap
         return try {
             // Both operations run in one main-thread turn. The single view replaces every region
             // together; no old per-region window can survive a reorder or count change.
             currentView.setImageBitmap(prepared.bitmap)
             windowManager.updateViewLayout(currentView, params)
-            displayedBitmap = prepared.bitmap
-            if (oldBitmap !== prepared.bitmap) recycleAfterViewRelease(oldBitmap)
+            if (BuildConfig.DEBUG) trackFrameCommit(currentView)
             true
         } catch (_: Throwable) {
-            // Never keep an overlay whose bitmap/geometry relationship is uncertain.
-            recycle(prepared.bitmap)
+            // setImageBitmap may already have handed the new bitmap to HWUI before a later
+            // WindowManager call throws. close() detaches the drawable; do not recycle a bitmap
+            // that may still be referenced by a queued hardware-render frame.
             close()
             false
         }
@@ -242,30 +249,52 @@ open class OverlayController(
     open fun clear() {
         val view = imageView
         imageView = null
-        val oldBitmap = displayedBitmap
-        displayedBitmap = null
+        frameCommitGeneration += 1L
+        displayedFrameCommitted = false
         if (view != null) {
-            runCatching { windowManager.removeView(view) }
+            // Detach the drawable before removing the Window. A frame already submitted to
+            // RenderThread can outlive this call, so the displayed Bitmap is intentionally not
+            // recycled here; after all Java/HWUI references disappear, normal GC reclaims it.
             view.setImageDrawable(null)
-            recycleAfterViewRelease(oldBitmap)
-        } else {
-            recycle(oldBitmap)
+            runCatching { windowManager.removeView(view) }
         }
     }
 
     open fun close() = clear()
 
-    /** Let the renderer retire its previous frame before releasing the bitmap's native pixels. */
-    private fun recycleAfterViewRelease(bitmap: Bitmap?) {
-        if (bitmap == null) return
-        mainHandler.postDelayed({ recycle(bitmap) }, BITMAP_RETIRE_DELAY_MS)
+    /** Debug-test observation: proves an overlay frame was submitted, not merely added to WMS. */
+    internal fun hasCommittedFrameForTest(): Boolean = displayedFrameCommitted
+
+    private fun trackFrameCommit(view: ImageView) {
+        val generation = frameCommitGeneration + 1L
+        frameCommitGeneration = generation
+        displayedFrameCommitted = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && view.isHardwareAccelerated) {
+            val observer = view.viewTreeObserver
+            if (observer.isAlive) {
+                observer.registerFrameCommitCallback {
+                    // An old frame can be committed after a newer bitmap has been installed or
+                    // after clear(). It must never mark the newer/cleared overlay as visible.
+                    if (frameCommitGeneration == generation && imageView === view) {
+                        displayedFrameCommitted = true
+                    }
+                }
+                view.invalidate()
+                return
+            }
+        }
+        // Software-rendered fallback: wait for two animation callbacks after attachment/update.
+        view.postOnAnimation {
+            view.postOnAnimation {
+                if (frameCommitGeneration == generation && imageView === view) {
+                    displayedFrameCommitted = true
+                }
+            }
+        }
     }
 
     private fun recycle(bitmap: Bitmap?) {
+        // Only call for a bitmap that was never supplied to a View (e.g. permission denied).
         if (bitmap != null && !bitmap.isRecycled) runCatching { bitmap.recycle() }
-    }
-
-    companion object {
-        private const val BITMAP_RETIRE_DELAY_MS = 200L
     }
 }

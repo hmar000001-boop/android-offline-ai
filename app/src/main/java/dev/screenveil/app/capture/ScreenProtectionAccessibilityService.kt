@@ -1049,9 +1049,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 }
                 val shown = overlay?.showPrepared(prepared) == true
                 if (!shown) {
+                    // A renderer can fail after assigning this bitmap to its ImageView (for
+                    // example, if updateViewLayout throws). OverlayController detaches any such
+                    // view. Do not recycle here: HWUI may still have a submitted frame referring
+                    // to the bitmap. If it was never attached, normal GC safely reclaims it.
                     // A failed renderer must stop protection, never replace the app with a
                     // full-window grey cover. The user's device remains operable.
-                    prepared?.bitmap?.let { if (!it.isRecycled) it.recycle() }
                     stopForSafety("Protection paused because the redaction overlay could not be updated. The screen is visible.", "Overlay rendering failed")
                     return@post
                 }
@@ -1086,6 +1089,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     )
                 )
             } else {
+                // This result is stale and was never passed to OverlayController, so its bitmap
+                // is still an unshared worker result and can be explicitly released here.
                 prepared?.bitmap?.let { if (!it.isRecycled) it.recycle() }
             }
         }
@@ -1345,6 +1350,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 currentInstance?.let { service -> service.mainHandler.post { service.requestScreenshot() } }
             }
         }
+
+        /** Debug instrumentation only: true after the overlay has submitted a rendered frame. */
+        internal fun hasOverlayFrameCommittedForTest(): Boolean =
+            BuildConfig.DEBUG && currentInstance?.overlay?.hasCommittedFrameForTest() == true
 
         /** Debug instrumentation only: confirms the previous frame has left every async stage. */
         internal fun isCapturePipelineIdleForTest(): Boolean = BuildConfig.DEBUG &&

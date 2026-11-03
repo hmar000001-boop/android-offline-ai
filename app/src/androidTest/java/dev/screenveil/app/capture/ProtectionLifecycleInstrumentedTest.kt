@@ -426,16 +426,39 @@ class ProtectionLifecycleInstrumentedTest {
 
     @Test
     fun explicitStopWhileLocalizedOverlayIsVisibleRemovesItImmediately() {
+        configureLongCaptureInterval()
         installFakeRuntime(resultDetector())
         launchFixtureWindow()
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
-        await("active localized overlay", timeoutMs = 20_000L) { hasRedactionWindow() }
+        await("localized overlay with completed analysis and a committed render frame", timeoutMs = 20_000L) {
+            val state = ProtectionStatus.state.value
+            state.active && state.modelReady && state.regionsRedacted == 1 &&
+                state.lastEndToEndMs != null && hasRedactionWindow() &&
+                ScreenProtectionAccessibilityService.hasOverlayFrameCommittedForTest()
+        }
+
+        // Match the established deterministic-test pattern: remove ambient periodic and
+        // framework-triggered work, then prove the in-flight capture/inference stages are idle.
+        var isolated = false
+        instrumentation.runOnMainSync {
+            isolated = ScreenProtectionAccessibilityService.beginIsolatedAccessibilityEventTest()
+        }
+        assertTrue("Could not isolate the completed overlay before explicit Stop", isolated)
+        await("capture pipeline to become quiescent before explicit Stop", timeoutMs = 3_000L) {
+            ScreenProtectionAccessibilityService.isCapturePipelineIdleForTest()
+        }
+        // A main-thread barrier drains work already enqueued before the idle observation. With
+        // platform accessibility events suppressed, this leaves Stop as the next lifecycle action.
+        instrumentation.runOnMainSync { }
 
         assertTrue(ScreenProtectionAccessibilityService.requestStop())
-        await("active overlay removal", timeoutMs = 5_000L) { !hasRedactionWindow() && !ProtectionStatus.state.value.active }
-        assertFalse(AppPreferences(context).isProtectionEnabled())
+        await("explicit Stop to clear the committed overlay and deactivate protection", timeoutMs = 5_000L) {
+            !hasRedactionWindow() && !ProtectionStatus.state.value.active &&
+                ProtectionStatus.state.value.regionsRedacted == 0
+        }
+        assertFalse("Explicit Stop must reset the persisted protection flag", AppPreferences(context).isProtectionEnabled())
     }
 
     @Test
