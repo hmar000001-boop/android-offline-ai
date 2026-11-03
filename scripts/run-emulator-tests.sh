@@ -3,6 +3,10 @@
 # Diagnose test APK runtime packaging before executing the instrumentation suite.
 set -u
 
+# Remove stale .kt fixture files left by overlaying a new source archive on an
+# older checkout, then fail early if any duplicate fixture declaration remains.
+bash scripts/prepare-instrumentation-sources.sh
+
 set +e
 bash scripts/diagnose-instrumentation-runtime.sh 2>&1 | tee instrumentation-runtime-diagnostics.log
 diagnostic_status=("${PIPESTATUS[@]}")
