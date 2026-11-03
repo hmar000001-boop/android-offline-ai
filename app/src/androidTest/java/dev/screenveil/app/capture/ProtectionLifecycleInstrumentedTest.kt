@@ -56,7 +56,6 @@ class ProtectionLifecycleInstrumentedTest {
 
     private var originalEnabledServices: String? = null
     private var originalAccessibilityEnabled: String? = null
-    private var originalNotificationsGranted: Boolean = false
     private var fakeCaptureCount = AtomicInteger(0)
 
     @Before
@@ -72,11 +71,16 @@ class ProtectionLifecycleInstrumentedTest {
             context.contentResolver,
             Settings.Secure.ACCESSIBILITY_ENABLED
         )
-        originalNotificationsGranted = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (!originalNotificationsGranted) {
-            uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
-        }
+        // The emulator runner grants POST_NOTIFICATIONS with `adb shell pm grant` before
+        // instrumentation starts. Do not grant/revoke it from UiAutomation inside this process:
+        // runtime permission changes can kill processes for the target UID and terminate the
+        // instrumentation run during @After. The CI emulator is disposable, so the grant is
+        // intentionally left in place until the emulator is discarded.
+        assertEquals(
+            "POST_NOTIFICATIONS must be pre-granted by scripts/run-emulator-tests.sh before instrumentation",
+            android.content.pm.PackageManager.PERMISSION_GRANTED,
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+        )
         context.getSharedPreferences("screenveil_preferences", Context.MODE_PRIVATE)
             .edit().clear().commit()
         AppPreferences(context).setProtectionEnabled(false)
@@ -99,11 +103,6 @@ class ProtectionLifecycleInstrumentedTest {
         if (!wasPreviouslyEnabled) {
             await("Accessibility service unbind", timeoutMs = 8_000L) {
                 !ScreenProtectionAccessibilityService.isServiceConnected()
-            }
-        }
-        if (!originalNotificationsGranted) {
-            runCatching {
-                uiAutomation.revokeRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
             }
         }
         ScreenVeilTestHooks.reset()
