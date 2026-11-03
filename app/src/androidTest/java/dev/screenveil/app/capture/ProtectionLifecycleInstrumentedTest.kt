@@ -33,6 +33,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Runs on a real Android emulator. The debug-only seams substitute model outputs and, where
@@ -266,23 +267,40 @@ class ProtectionLifecycleInstrumentedTest {
     fun repeatedModelFailuresStopAndClearAnExistingOverlay() {
         configureLongCaptureInterval()
         val inspections = AtomicInteger(0)
+        // Keep normal inference successful until the test has observed the localized overlay.
+        // The previous test failed after the first inspect() call, allowing a second framework-
+        // initiated capture to trip the error before the test thread could observe the overlay.
+        val injectFailures = AtomicBoolean(false)
         val detector = FakeDetector {
-            if (inspections.getAndIncrement() == 0) {
-                DetectionResult(
-                    listOf(DetectedMediaRegion(NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image")),
-                    parseSucceeded = true
-                )
-            } else {
+            inspections.incrementAndGet()
+            if (injectFailures.get()) {
                 error("injected model failure")
             }
+            DetectionResult(
+                listOf(DetectedMediaRegion(NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image")),
+                parseSucceeded = true
+            )
         }
         installFakeRuntime(detector)
         launchFixtureWindow()
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
-        await("initial overlay before model failure injection", timeoutMs = 20_000L) { hasRedactionWindow() }
-
+        try {
+            await("initial overlay before model failure injection", timeoutMs = 20_000L) {
+                ProtectionStatus.state.value.active &&
+                    ProtectionStatus.state.value.regionsRedacted == 1 &&
+                    hasRedactionWindow()
+            }
+        } catch (failure: AssertionError) {
+            throw AssertionError(
+                "A valid first inference did not create an overlay. inspections=${inspections.get()}; " +
+                    "captures=${fakeCaptureCount.get()}; status=${ProtectionStatus.state.value}; " +
+                    "service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}",
+                failure
+            )
+        }
+        injectFailures.set(true)
         ScreenProtectionAccessibilityService.requestScreenshotForTest()
         await("model failure circuit breaker", timeoutMs = 12_000L) {
             !ProtectionStatus.state.value.active &&
@@ -569,8 +587,13 @@ class ProtectionLifecycleInstrumentedTest {
             resetResponse?.getBoolean(ScreenVeilFixtureStateProvider.KEY_ACCEPTED, false) == true
         )
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
-        val secureExtra = if (secure) " --ez secure true" else ""
-        val launchOutput = shell("am start -W -n ${component.flattenToString()}$secureExtra")
+        val secureExtra = if (secure) " --ez secure true" else " --ez secure false"
+        // The fixture APK is reused across instrumentation tests. Clear its previous task so
+        // every launch starts with the requested Intent extras rather than inheriting an older
+        // Activity instance and its previous Window flags.
+        val launchOutput = shell(
+            "am start -W -n ${component.flattenToString()} --activity-clear-task --activity-new-task$secureExtra"
+        )
         assertTrue(
             "ActivityManager did not report a successful fixture launch. " +
                 "component=${component.flattenToString()}; output=$launchOutput",

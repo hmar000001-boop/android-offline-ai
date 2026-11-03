@@ -3,6 +3,7 @@
         <activity
             android:name="dev.screenveil.app.fixture.ScreenVeilFixtureActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="ScreenVeil test fixture"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <provider

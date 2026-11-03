@@ -2,6 +2,7 @@ package dev.screenveil.app.fixture;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.WindowManager;
@@ -30,16 +31,30 @@ public class ScreenVeilFixtureActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (getIntent().getBooleanExtra("secure", false)) {
-            getWindow().setFlags(
-                    WindowManager.LayoutParams.FLAG_SECURE,
-                    WindowManager.LayoutParams.FLAG_SECURE);
-        }
+        configureWindowAndContent(getIntent());
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
+        publishRuntimeWindowState(false);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        configureWindowAndContent(intent);
+        // The Activity may already be focused when Android delivers a new launch Intent.
+        publishRuntimeWindowState(hasWindowFocus());
+    }
+
+    private void configureWindowAndContent(Intent intent) {
+        if (intent.getBooleanExtra("secure", false)) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }
+
         boolean secureFlagApplied =
                 (getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE) != 0;
-
         TextView view = new TextView(this);
         view.setText(secureFlagApplied
                 ? "SCREENVEIL_SECURE_FLAG_CONFIRMED\nAndroid must refuse this window screenshot."
@@ -53,7 +68,6 @@ public class ScreenVeilFixtureActivity extends Activity {
                 : "screenveil-capture-fixture");
         content = view;
         setContentView(view);
-        publishRuntimeWindowState(false);
     }
 
     @Override
