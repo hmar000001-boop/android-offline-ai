@@ -1,21 +1,23 @@
 # Emulator instrumentation follow-up — 2026-11-03
 
-This change addresses two failures observed after the instrumentation suite successfully compiled and ran 18 tests on the API 36 emulator.
+## r4 regression: fixture Activity launch command
 
-## 1. `repeatedModelFailuresStopAndClearAnExistingOverlay`
+The API 34 run reported 11 failures with the same message: `ActivityManager did not report a successful fixture launch`, with empty command output. Inspection of `launchFixtureWindow()` found that r4 passed `--activity-new-task` to `am start`. That is not a supported `ActivityManagerShellCommand` option. `am start` already adds `Intent.FLAG_ACTIVITY_NEW_TASK`; the extra argument was both invalid and unnecessary.
 
-The prior fake detector returned one valid result and threw on every later call. The service can request another screenshot due to real Accessibility events or its capture schedule. That second inference could fail before the test thread observed the first overlay, making the test race its own setup.
+The launch command now retains the supported `--activity-clear-task` option and removes `--activity-new-task`. It merges standard error into standard output with `2>&1`, because `UiAutomation.executeShellCommand()` exposes standard output only.
 
-The detector now keeps returning the valid localized result until the test has observed an active status with one redacted region and the overlay window. Only then does the test enable the injected failures and explicitly request another screenshot. The wait failure now reports detector calls, capture count, protection status, and service diagnostics. This makes the test validate the intended sequence: valid overlay first, repeated failures second, safe stop and overlay removal last.
+The helper no longer treats the exact text `Status: ok` as the sole success condition. It waits for the expected fixture component to appear as the resumed Activity, then independently waits for the fixture ContentProvider report to confirm Activity creation, window focus, and the requested `FLAG_SECURE` state. If either check times out, the assertion includes the full command, merged command output, ActivityTaskManager resumed-Activity diagnostics, and fixture state.
 
-## 2. `androidSecureWindowScreenshotDenialPausesWithoutOverlay`
+## Earlier test corrections retained
 
-The instrumentation APK keeps its fixture Activity across test cases. Merely launching the same component with a different `secure` extra does not guarantee that `onCreate()` runs on a reused Activity instance. The previous fixture only applied `FLAG_SECURE` in `onCreate()`, so a focused reused Activity could publish flags from the earlier non-secure launch.
+### `repeatedModelFailuresStopAndClearAnExistingOverlay`
 
-Fixture launch now clears and recreates its task using `--activity-clear-task --activity-new-task`, and the manifest uses `singleTop`. The Java fixture also handles `onNewIntent()`, re-applies or clears `FLAG_SECURE` from the new Intent, rebuilds its visible content, and republishes the actual Window flags. The test still requires the runtime report to prove that `FLAG_SECURE` is set before it expects Android's screenshot API to reject capture.
+The fake detector returns valid detections until the test observes an active status with one redacted region and a visible overlay. Only then does the test enable injected failures and request another capture. This removes the race in which a scheduled capture could fail before the test observed its initial overlay.
+
+### `androidSecureWindowScreenshotDenialPausesWithoutOverlay`
+
+The Java fixture handles `onNewIntent()` and reapplies or clears `FLAG_SECURE` based on the incoming Intent. The launch helper resets fixture IPC state before each launch and now validates that the published secure-flag state matches the requested `secure` argument.
 
 ## Verification status
 
-Static checks performed on the source tree: fixture references and Java declarations inspected; shell scripts syntax-checked; test source inspected for the updated injection ordering; ZIP integrity checked.
-
-Not run in this environment: Gradle compilation, Android instrumentation, API 34/API 36 emulator tests, and real Galaxy S24 FE tests. CI must confirm those. The emulator-console warning in the supplied log did not prevent the emulator from running tests; the two reported failures were test assertions, not emulator startup failures.
+Static source inspection and shell checks can validate the command shape and diagnostics, but they do not establish Android Activity Manager behavior. Gradle compilation, API 34/API 36 instrumentation runs, and real Galaxy S24 FE validation must still be confirmed by CI and device testing. No emulator test pass is claimed by this source revision.

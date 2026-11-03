@@ -588,37 +588,42 @@ class ProtectionLifecycleInstrumentedTest {
         )
         val component = ComponentName(fixturePackage, ScreenVeilFixtureActivity::class.java.name)
         val secureExtra = if (secure) " --ez secure true" else " --ez secure false"
-        // The fixture APK is reused across instrumentation tests. Clear its previous task so
-        // every launch starts with the requested Intent extras rather than inheriting an older
-        // Activity instance and its previous Window flags.
-        val launchOutput = shell(
-            "am start -W -n ${component.flattenToString()} --activity-clear-task --activity-new-task$secureExtra"
-        )
-        assertTrue(
-            "ActivityManager did not report a successful fixture launch. " +
-                "component=${component.flattenToString()}; output=$launchOutput",
-            launchOutput.contains("Status: ok", ignoreCase = true)
-        )
+        // `am start` already adds FLAG_ACTIVITY_NEW_TASK. Do not pass a separate
+        // new-task switch: ActivityManagerShellCommand does not support that argument.
+        // CLEAR_TASK is supported and, together with am start's NEW_TASK flag, gives each test
+        // a fresh fixture task. Merge stderr into stdout because executeShellCommand() exposes
+        // only stdout; otherwise parser/launch errors can be hidden from this test report.
+        val launchCommand =
+            "am start -W -n ${component.flattenToString()} --activity-clear-task$secureExtra 2>&1"
+        val launchOutput = shell(launchCommand)
+
+        // Do not treat the textual `Status: ok` line as the source of truth. Shell output varies
+        // across Android releases, and a successful Activity launch is established by the
+        // resumed Activity record followed by the fixture's independent ContentProvider report.
         try {
             await("test fixture activity to become the resumed foreground activity", timeoutMs = 10_000L) {
                 isFixtureActivityResumed(component)
             }
         } catch (failure: AssertionError) {
             throw AssertionError(
-                "Fixture launch returned successfully but it did not become the resumed activity. " +
-                    "component=${component.flattenToString()}; launchOutput=$launchOutput; " +
-                    "activityState=${resumedActivityDiagnostics()}",
+                "Fixture Activity did not become resumed after the launch command. " +
+                    "component=${component.flattenToString()}; command=$launchCommand; " +
+                    "mergedOutput=$launchOutput; activityState=${resumedActivityDiagnostics()}",
                 failure
             )
         }
         try {
-            await("fixture Activity creation and window focus callback", timeoutMs = 10_000L) {
-                fixtureWindowReport().let { it.created && it.focused }
+            await("fixture Activity creation, focus, and requested secure-window state", timeoutMs = 10_000L) {
+                fixtureWindowReport().let {
+                    it.created && it.focused && it.secureFlagApplied == secure
+                }
             }
         } catch (failure: AssertionError) {
             throw AssertionError(
-                "Fixture Activity launch succeeded but its runtime window report is incomplete: " +
-                    "${fixtureWindowReport()}; resumedActivity=${resumedActivityDiagnostics()}",
+                "Fixture Activity is resumed but its runtime window report does not match the " +
+                    "requested launch state (secure=$secure): ${fixtureWindowReport()}; " +
+                    "command=$launchCommand; mergedOutput=$launchOutput; " +
+                    "resumedActivity=${resumedActivityDiagnostics()}",
                 failure
             )
         }
