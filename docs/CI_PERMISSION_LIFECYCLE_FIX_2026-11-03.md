@@ -15,7 +15,7 @@ API 34's long-running job is consistent with the same teardown/process-terminati
 1. Removed `UiAutomation.revokeRuntimePermission()` from test teardown.
 2. Removed the in-process `UiAutomation.grantRuntimePermission()` setup path.
 3. Added a strict setup assertion that `POST_NOTIFICATIONS` is already granted before each test.
-4. Updated `scripts/run-emulator-tests.sh` to grant and verify `POST_NOTIFICATIONS` with `adb shell pm grant` / `pm check-permission` after the diagnostic script installs both APKs and before `connectedDebugAndroidTest` starts.
+4. Updated `scripts/run-emulator-tests.sh` to grant `POST_NOTIFICATIONS` with `adb shell pm grant PACKAGE PERMISSION` and verify it with `adb shell pm check-permission PERMISSION PACKAGE --user 0` after the diagnostic script installs both APKs and before `connectedDebugAndroidTest` starts. The check command uses permission-first argument order; the grant command uses package-first argument order.
 5. The CI emulator is disposable, so the permission is deliberately not restored from inside instrumentation.
 
 No production application code, model, detector threshold, coverage limit, overlay rendering policy, or Gradle dependency was changed.
@@ -33,3 +33,8 @@ A full Gradle build and emulator run were not available in this environment. The
 
 - Android Open Source Project, Runtime permissions: https://source.android.com/docs/core/permissions/runtime_perms
 - Android `UiAutomation` API: https://developer.android.com/reference/android/app/UiAutomation
+
+
+## Follow-up packaging correction
+
+The first permission-fix archive accidentally passed the `pm check-permission` arguments in package-first order. This follow-up archive corrects the check to `android.permission.POST_NOTIFICATIONS dev.screenveil.app --user 0`. The grant command remains `dev.screenveil.app android.permission.POST_NOTIFICATIONS`, as required by `pm grant`.

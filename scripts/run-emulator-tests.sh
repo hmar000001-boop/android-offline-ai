@@ -35,7 +35,7 @@ diagnostic_tee_status="${diagnostic_status[1]:-1}"
 # This emulator is disposable; do not revoke the permission inside the test process.
 echo "Pre-granting POST_NOTIFICATIONS outside instrumentation..."
 adb shell pm grant dev.screenveil.app android.permission.POST_NOTIFICATIONS
-notification_permission="$(adb shell pm check-permission dev.screenveil.app android.permission.POST_NOTIFICATIONS 2>/dev/null | tr -d '\r')"
+notification_permission="$(adb shell pm check-permission android.permission.POST_NOTIFICATIONS dev.screenveil.app --user 0 2>/dev/null | tr -d '\r')"
 if [[ "$notification_permission" != "granted" ]]; then
   echo "POST_NOTIFICATIONS pre-grant failed: permission status=$notification_permission" >&2
   exit 1
