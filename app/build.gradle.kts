@@ -5,6 +5,16 @@ plugins {
 }
 
 android {
+    // CI instrumentation needs POST_NOTIFICATIONS granted before AndroidJUnitRunner starts.
+    // AGP passes these options to the install operations it performs for connected tests.
+    // This is enabled only in the disposable emulator job; it is NOT packaged into the APK.
+    if (System.getenv("SCREENVEIL_CI_GRANT_RUNTIME_PERMISSIONS") == "1") {
+        installation {
+            installOptions.add("-g")
+        }
+        println("SCREENVEIL_GRADLE_INSTALL_OPTIONS=-g")
+    }
+
     namespace = "dev.screenveil.app"
     compileSdk = 36
 

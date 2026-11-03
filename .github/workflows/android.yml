@@ -191,6 +191,11 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Identify checked-out ScreenVeil CI source
+        run: |
+          echo "SCREENVEIL_CI_CHECKOUT_SHA=$(git rev-parse HEAD)"
+          sha256sum scripts/run-emulator-tests.sh scripts/install-test-app-with-grants.sh app/build.gradle.kts
+
       - name: Run Accessibility lifecycle tests on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -227,7 +232,9 @@ jobs:
             app/build/outputs/apk/androidTest/debug/*.apk
             build/instrumentation-runtime-diagnostics/**
             build/emulator-failure-diagnostics/**
+            build/emulator-preflight-failure/**
             instrumentation-runtime-diagnostics.log
+            permission-preflight.log
             emulator-tests.log
             build/reports/problems/problems-report.html
           if-no-files-found: ignore

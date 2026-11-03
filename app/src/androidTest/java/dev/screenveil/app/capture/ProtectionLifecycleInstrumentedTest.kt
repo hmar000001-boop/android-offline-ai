@@ -71,8 +71,9 @@ class ProtectionLifecycleInstrumentedTest {
             context.contentResolver,
             Settings.Secure.ACCESSIBILITY_ENABLED
         )
-        // The emulator runner grants POST_NOTIFICATIONS with `adb shell pm grant` before
-        // instrumentation starts. Do not grant/revoke it from UiAutomation inside this process:
+        // The CI host grants POST_NOTIFICATIONS with `adb install -g` and AGP installation
+        // options before/in the connected-test APK installation. Do not grant/revoke it from
+        // UiAutomation inside this process:
         // runtime permission changes can kill processes for the target UID and terminate the
         // instrumentation run during @After. The CI emulator is disposable, so the grant is
         // intentionally left in place until the emulator is discarded.
