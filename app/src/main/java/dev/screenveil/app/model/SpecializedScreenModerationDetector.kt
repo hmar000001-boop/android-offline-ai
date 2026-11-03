@@ -106,11 +106,18 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 else RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
             }
 
-        // Bound work on crowded screenshots. Keep the detector's highest-ranked results (the
-        // ObjectDetector API returns confidence-ranked detections) and never replace them with a
-        // whole-screen mask. The diagnostic reports that some people were not evaluated.
-        val detectionsTruncated = detections.size > MAX_PERSON_CROPS
-        val selectedDetections = detections.take(MAX_PERSON_CROPS)
+        // Never silently drop people from a crowded screen: doing so could leave an unexamined
+        // person visible while claiming that the frame was checked. Work is bounded to 24 crops;
+        // above that count, stop protection rather than truncating candidates.
+        if (detections.size > MAX_PERSON_CROPS) {
+            return DetectionResult(
+                regions = emptyList(),
+                parseSucceeded = true,
+                diagnostic = "Person detector returned ${detections.size} candidates; maximum safely classifiable count is $MAX_PERSON_CROPS",
+                safetyViolation = true
+            )
+        }
+        val selectedDetections = detections
 
         if (selectedDetections.isEmpty() && vitNsfw != null) {
             val tiledRegions = scanScreenTilesWithVit(bitmap, vitNsfw, env)
@@ -165,7 +172,6 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
             parseSucceeded = true,
             diagnostic = buildString {
                 append("Offline NSFW ensemble · ${regions.size} person region(s); low-scoring people are PERSON_LOW_RISK (not a clothing verdict) and are covered only in strict mode.")
-                if (detectionsTruncated) append(" More than $MAX_PERSON_CROPS people were detected; lower-ranked person boxes were not evaluated.")
                 append(" Whole-screen scoring is disabled to prevent global redaction.")
             }
         )

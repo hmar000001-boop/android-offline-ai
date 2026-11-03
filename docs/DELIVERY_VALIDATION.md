@@ -1,3 +1,36 @@
+# Delivery validation — ScreenVeil 1.6.0 (R6)
+
+## Current R6 implementation snapshot
+
+The R6 source package carries the previously CI-validated R5 project forward and implements the approved safety changes:
+
+- Universal pixel-mask limits: 35% maximum for one region and 45% maximum combined; no confirmed-category exemptions. Violations stop protection and clear the overlay.
+- Scheduled coverage watchdog: ≥35% for 3 seconds; maximum protection session: **5 minutes**; screenshot callback deadline: 5 seconds; inference deadline: 8 seconds.
+- Google Selfie Multiclass 256×256 body segmentation is a fifth catalog artifact, pinned to the versioned Google URL, exact SHA-256 and 16–17 MB bounds. Only body-skin and clothing class pixels are redacted; no rectangular fallback is allowed.
+- The TFLite Task Vision file initialization uses the `File` overload for an already-downloaded private model file.
+- The Stop notification is required before Start. The Quick Settings tile is Stop-only.
+- The source tree contains 58 unit-test methods and 29 instrumentation-test methods, including full-screen and aggregate confirmed-mask rejection, watchdogs that remain active across screen-generation changes, a non-extendable five-minute session, and body-pixel rendering.
+- User-facing documentation, model governance, third-party notices and S24 FE validation instructions have been updated to the R6 policy.
+
+## Verification performed while preparing this archive
+
+Static/source-level checks are recorded in the package report. The source/model catalog and archive can be statically inspected here, but this environment does not have a working Android Gradle distribution or an Android emulator. Therefore no claim is made that this exact R6 revision compiles, passes unit tests, passes Android lint, packages APKs, runs the API 34/API 36 emulator suite, initializes the real models or operates correctly on the Galaxy S24 FE.
+
+## Required verification before installation
+
+1. Run R6 GitHub Actions. Require successful `build`, `release-build`, API 34 and API 36 emulator jobs.
+2. Run the manual model pin-verification job and confirm all five catalog artifacts pass, including the new Selfie Multiclass versioned URL and SHA-256.
+3. Inspect the debug APK artifact; the unsigned R8 release APK is not the installation target. Configure release signing separately only when a distributable signed release is needed.
+4. Follow `DEVICE_VALIDATION.md` on the Galaxy S24 FE. In particular, verify body/clothing mask alignment, Stop, 5-minute auto-stop, coverage limits, inference and screenshot watchdogs, memory, latency, battery and thermal behavior.
+
+**Release classification:** complete R6 source implementation package, pending R6 CI and physical-device validation. It is not yet a verified installable APK or a claim of production-ready protection.
+
+---
+
+## Historical delivery notes (R1.3–R1.5.2)
+
+The sections below record earlier revisions and their checks. They are retained for traceability and do not describe current R6 policy or test counts.
+
 # Delivery validation — balanced model approval update
 
 ## Changes applied to this source package

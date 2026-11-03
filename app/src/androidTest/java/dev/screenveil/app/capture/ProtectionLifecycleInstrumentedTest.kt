@@ -16,12 +16,15 @@ import dev.screenveil.app.AppPreferences
 import dev.screenveil.app.fixture.ScreenVeilFixtureActivity
 import dev.screenveil.app.fixture.ScreenVeilFixtureStateProvider
 import dev.screenveil.app.model.DetectionResult
+import dev.screenveil.app.model.BodySegmentationMask
+import dev.screenveil.app.model.HumanBodySegmenter
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.ModelFiles
 import dev.screenveil.app.model.NormalizedBox
 import dev.screenveil.app.model.ScreenContentDetector
 import dev.screenveil.app.overlay.OverlayController
 import dev.screenveil.app.policy.ContentDecision
+import dev.screenveil.app.policy.CoveragePolicy
 import dev.screenveil.app.policy.ModerationSettings
 import dev.screenveil.app.policy.RedactionEffect
 import org.junit.After
@@ -53,11 +56,13 @@ class ProtectionLifecycleInstrumentedTest {
 
     private var originalEnabledServices: String? = null
     private var originalAccessibilityEnabled: String? = null
+    private var originalNotificationsGranted: Boolean = false
     private var fakeCaptureCount = AtomicInteger(0)
 
     @Before
     fun setUp() {
         ScreenVeilTestHooks.reset()
+        ScreenProtectionAccessibilityService.resetWorkerPoisonForTest()
         fakeCaptureCount = AtomicInteger(0)
         originalEnabledServices = Settings.Secure.getString(
             context.contentResolver,
@@ -67,6 +72,11 @@ class ProtectionLifecycleInstrumentedTest {
             context.contentResolver,
             Settings.Secure.ACCESSIBILITY_ENABLED
         )
+        originalNotificationsGranted = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!originalNotificationsGranted) {
+            uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+        }
         context.getSharedPreferences("screenveil_preferences", Context.MODE_PRIVATE)
             .edit().clear().commit()
         AppPreferences(context).setProtectionEnabled(false)
@@ -89,6 +99,11 @@ class ProtectionLifecycleInstrumentedTest {
         if (!wasPreviouslyEnabled) {
             await("Accessibility service unbind", timeoutMs = 8_000L) {
                 !ScreenProtectionAccessibilityService.isServiceConnected()
+            }
+        }
+        if (!originalNotificationsGranted) {
+            runCatching {
+                uiAutomation.revokeRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
             }
         }
         ScreenVeilTestHooks.reset()
@@ -277,7 +292,10 @@ class ProtectionLifecycleInstrumentedTest {
                 error("injected model failure")
             }
             DetectionResult(
-                listOf(DetectedMediaRegion(NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image")),
+                listOf(DetectedMediaRegion(
+                    NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image",
+                    bodyMask = BodySegmentationMask.synthetic(100, 100)
+                )),
                 parseSucceeded = true
             )
         }
@@ -466,13 +484,313 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     @Test
+    fun fiveMinuteSessionWatchdogStopsAndClearsTheOverlayWithoutBeingExtendedByStart() {
+        ScreenVeilTestHooks.sessionTimeoutMsOverride = 5_000L
+        installFakeRuntime(resultDetector())
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        val sessionStartRequestedAt = System.currentTimeMillis()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("localized overlay before short session deadline", timeoutMs = 20_000L) { hasRedactionWindow() }
+        Thread.sleep(2_200L)
+        // Repeated Start requests must be idempotent and must not restart the maximum-session clock.
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("original session watchdog deadline to stop and clear the overlay", timeoutMs = 3_500L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+        val elapsed = System.currentTimeMillis() - sessionStartRequestedAt
+        assertTrue("Repeated Start extended the session deadline: elapsed=${elapsed}ms", elapsed < 5_500L)
+        assertFalse(AppPreferences(context).isProtectionEnabled())
+    }
+
+    @Test
+    fun sustainedCoverageWatchdogStopsAndClearsTheOverlay() {
+        ScreenVeilTestHooks.coverageWatchdogThresholdOverride = 0.35
+        ScreenVeilTestHooks.coverageWatchdogDwellMsOverride = 350L
+        val detector = FakeDetector {
+            DetectionResult(
+                regions = listOf(
+                    DetectedMediaRegion(NormalizedBox(0, 0, 200, 1000), ContentDecision.EXPLICIT, "image"),
+                    DetectedMediaRegion(NormalizedBox(300, 0, 500, 1000), ContentDecision.EXPLICIT, "image")
+                ),
+                parseSucceeded = true
+            )
+        }
+        installFakeRuntime(detector)
+        ScreenVeilTestHooks.bodySegmenterFactory = {
+            object : HumanBodySegmenter {
+                override fun initialize(context: Context, modelFiles: ModelFiles) = Unit
+                override fun segment(frame: Bitmap): BodySegmentationMask =
+                    BodySegmentationMask.syntheticFullFrame(frame.width, frame.height)
+                override fun close() = Unit
+            }
+        }
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("overlay above the coverage-watchdog threshold", timeoutMs = 20_000L) {
+            hasRedactionWindow() && ProtectionStatus.state.value.active
+        }
+        await("coverage watchdog stop and overlay clear", timeoutMs = 5_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+    }
+
+    @Test
+    fun inferenceDeadlineStopsProtectionAndInvalidatesLateResults() {
+        ScreenVeilTestHooks.inferenceTimeoutMsOverride = 350L
+        val detector = FakeDetector {
+            try {
+                Thread.sleep(5_000L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
+            DetectionResult(emptyList(), parseSucceeded = true)
+        }
+        installFakeRuntime(detector)
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("inference watchdog stops a hung detector", timeoutMs = 5_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+        assertTrue("A timed-out native inference worker must poison the current app process", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        assertFalse(AppPreferences(context).isProtectionEnabled())
+        assertTrue("A new Start request is accepted by the service command queue", ScreenProtectionAccessibilityService.requestStart())
+        await("restart refusal after a hard inference timeout", timeoutMs = 3_000L) {
+            !ProtectionStatus.state.value.active &&
+                ProtectionStatus.state.value.message.contains("Force-stop ScreenVeil", ignoreCase = true)
+        }
+        assertFalse("A poisoned process must not start another inference worker", hasRedactionWindow())
+    }
+
+    @Test
+    fun screenshotDeadlineStopsProtectionWhenCaptureCallbackStalls() {
+        ScreenVeilTestHooks.screenshotTimeoutMsOverride = 350L
+        ScreenVeilTestHooks.detectorFactory = { _, _ -> resultDetector() }
+        ScreenVeilTestHooks.frameProvider = {
+            try {
+                Thread.sleep(5_000L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
+            Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        }
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("screenshot watchdog stops stalled capture", timeoutMs = 5_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+        assertTrue("A timed-out screenshot worker must poison the current app process", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        assertFalse(AppPreferences(context).isProtectionEnabled())
+    }
+
+    @Test
+    fun inferenceDeadlineStillStopsAfterWindowGenerationChanges() {
+        ScreenVeilTestHooks.inferenceTimeoutMsOverride = 900L
+        val inferenceStarted = AtomicBoolean(false)
+        val detector = FakeDetector {
+            inferenceStarted.set(true)
+            try {
+                Thread.sleep(5_000L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
+            DetectionResult(emptyList(), parseSucceeded = true)
+        }
+        installFakeRuntime(detector)
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("inference worker to enter the deliberately blocked detector", timeoutMs = 10_000L) {
+            inferenceStarted.get()
+        }
+
+        // An event from ScreenVeil itself clears the overlay and advances maskGeneration without
+        // requesting another capture. It must not cancel the liveness deadline for the hung worker.
+        invalidateMaskGenerationWithoutSchedulingCapture()
+        await("inference watchdog to stop despite a changed screen generation", timeoutMs = 5_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+        assertTrue(
+            "The stop reason should identify the inference deadline: ${ProtectionStatus.state.value.error}",
+            ProtectionStatus.state.value.error.orEmpty().contains("Inference watchdog expired", ignoreCase = true)
+        )
+        assertTrue("Process poison must survive the screen-generation change", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        assertFalse(AppPreferences(context).isProtectionEnabled())
+    }
+
+    @Test
+    fun screenshotDeadlineStillStopsAfterWindowGenerationChanges() {
+        ScreenVeilTestHooks.screenshotTimeoutMsOverride = 900L
+        val screenshotStarted = AtomicBoolean(false)
+        ScreenVeilTestHooks.detectorFactory = { _, _ -> resultDetector() }
+        ScreenVeilTestHooks.frameProvider = { bounds ->
+            screenshotStarted.set(true)
+            try {
+                Thread.sleep(5_000L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
+            Bitmap.createBitmap(bounds.width().coerceAtLeast(2), bounds.height().coerceAtLeast(2), Bitmap.Config.ARGB_8888)
+        }
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("screenshot worker to enter the deliberately blocked frame provider", timeoutMs = 10_000L) {
+            screenshotStarted.get()
+        }
+
+        invalidateMaskGenerationWithoutSchedulingCapture()
+        await("screenshot watchdog to stop despite a changed screen generation", timeoutMs = 5_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        }
+        assertTrue(
+            "The stop reason should identify the screenshot deadline: ${ProtectionStatus.state.value.error}",
+            ProtectionStatus.state.value.error.orEmpty().contains("Screenshot watchdog expired", ignoreCase = true)
+        )
+        assertTrue("Process poison must survive the screen-generation change", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        assertFalse(AppPreferences(context).isProtectionEnabled())
+    }
+
+    @Test
+    fun fullScreenConfirmedRegionIsRejectedByThePerRegionPixelLimit() {
+        val source = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GREEN) }
+        val controller = OverlayController(context)
+        var rejected = false
+        try {
+            controller.prepare(
+                frame = source,
+                regions = listOf(
+                    DetectedMediaRegion(
+                        NormalizedBox(0, 0, 1000, 1000), ContentDecision.EXPLICIT, "image",
+                        bodyMask = BodySegmentationMask.syntheticFullFrame(100, 100)
+                    )
+                ),
+                settings = ModerationSettings(effect = RedactionEffect.OPAQUE_COVER, intensity = 18),
+                screenBounds = Rect(0, 0, 100, 100)
+            )
+        } catch (expected: CoveragePolicy.CoverageLimitExceededException) {
+            rejected = true
+            assertTrue(expected.message.orEmpty().contains("maximum", ignoreCase = true))
+        } finally {
+            source.recycle()
+            controller.close()
+        }
+        assertTrue("A confirmed EXPLICIT full-screen result must not bypass the 35% pixel cap", rejected)
+    }
+
+    @Test
+    fun confirmedRegionsCannotBypassTheCombinedPixelCoverageLimit() {
+        val source = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GREEN) }
+        val controller = OverlayController(context)
+        var rejected = false
+        try {
+            controller.prepare(
+                frame = source,
+                regions = listOf(
+                    DetectedMediaRegion(
+                        NormalizedBox(0, 0, 300, 1000), ContentDecision.EXPLICIT, "image",
+                        bodyMask = BodySegmentationMask.syntheticFullFrame(100, 100)
+                    ),
+                    DetectedMediaRegion(
+                        NormalizedBox(700, 0, 1000, 1000), ContentDecision.SWIMWEAR, "image",
+                        bodyMask = BodySegmentationMask.syntheticFullFrame(100, 100)
+                    )
+                ),
+                settings = ModerationSettings(effect = RedactionEffect.OPAQUE_COVER, intensity = 18),
+                screenBounds = Rect(0, 0, 100, 100)
+            )
+        } catch (expected: CoveragePolicy.CoverageLimitExceededException) {
+            rejected = true
+            assertTrue(expected.message.orEmpty().contains("Combined", ignoreCase = true))
+        } finally {
+            source.recycle()
+            controller.close()
+        }
+        assertTrue("Two confirmed regions covering 60% must exceed the 45% aggregate cap", rejected)
+    }
+
+    @Test
+    fun fullScreenConfirmedDetectionStopsProtectionAndClearsTheOverlay() {
+        val detector = FakeDetector {
+            DetectionResult(
+                regions = listOf(
+                    DetectedMediaRegion(
+                        NormalizedBox(0, 0, 1000, 1000), ContentDecision.EXPLICIT, "image"
+                    )
+                ),
+                parseSucceeded = true
+            )
+        }
+        installFakeRuntime(detector)
+        ScreenVeilTestHooks.bodySegmenterFactory = {
+            object : HumanBodySegmenter {
+                override fun initialize(context: Context, modelFiles: ModelFiles) = Unit
+                override fun segment(frame: Bitmap): BodySegmentationMask =
+                    BodySegmentationMask.syntheticFullFrame(frame.width, frame.height)
+                override fun close() = Unit
+            }
+        }
+        launchFixtureWindow()
+        enableScreenVeilAccessibility()
+        awaitAccessibilityServiceConnection()
+        assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        await("full-screen confirmed detection to trigger the safety stop", timeoutMs = 10_000L) {
+            !ProtectionStatus.state.value.active && !hasRedactionWindow() &&
+                ProtectionStatus.state.value.error.orEmpty().contains("maximum", ignoreCase = true)
+        }
+        assertFalse("Unsafe model output must turn persisted protection OFF", AppPreferences(context).isProtectionEnabled())
+        assertFalse("No full-screen redaction overlay may remain", hasRedactionWindow())
+    }
+
+    @Test
+    fun fullScreenDetectorBoxOnlyRedactsSegmentedBodyPixels() {
+        val source = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GREEN) }
+        val controller = OverlayController(context)
+        val prepared = controller.prepare(
+            frame = source,
+            regions = listOf(
+                DetectedMediaRegion(
+                    NormalizedBox(0, 0, 1000, 1000), ContentDecision.EXPLICIT, "image",
+                    bodyMask = BodySegmentationMask.synthetic(100, 100)
+                )
+            ),
+            settings = ModerationSettings(effect = RedactionEffect.OPAQUE_COVER, intensity = 18),
+            screenBounds = Rect(0, 0, 100, 100)
+        )
+        val output = checkNotNull(prepared).bitmap
+        assertTrue("The segmented body centre should be redacted", Color.alpha(output.getPixel(50, 50)) > 0)
+        assertEquals("The background corner must remain transparent", 0, Color.alpha(output.getPixel(5, 5)))
+        assertTrue("The final body mask must respect the per-region cap", prepared.coverageFraction <= 0.35)
+        assertTrue("No full-screen rectangle may be drawn", prepared.coverageFraction < 1.0)
+        output.recycle()
+        source.recycle()
+        controller.close()
+    }
+
+    @Test
     fun overlayPreparationChangesOnlyTheDetectedRectangle() {
         val source = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GREEN) }
         val controller = OverlayController(context)
         val prepared = controller.prepare(
             frame = source,
             regions = listOf(
-                DetectedMediaRegion(NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image")
+                DetectedMediaRegion(
+                    NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image",
+                    bodyMask = BodySegmentationMask.synthetic(100, 100)
+                )
             ),
             settings = ModerationSettings(effect = RedactionEffect.OPAQUE_COVER, intensity = 18),
             screenBounds = Rect(0, 0, 100, 100)
@@ -502,7 +820,10 @@ class ProtectionLifecycleInstrumentedTest {
             OverlayController(context).prepare(
                 frame = source,
                 regions = listOf(
-                    DetectedMediaRegion(NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image")
+                    DetectedMediaRegion(
+                    NormalizedBox(250, 250, 750, 750), ContentDecision.EXPLICIT, "image",
+                    bodyMask = BodySegmentationMask.synthetic(100, 100)
+                )
                 ),
                 settings = ModerationSettings(effect = RedactionEffect.GAUSSIAN_BLUR, intensity = 18),
                 screenBounds = Rect(0, 0, 100, 100)
@@ -684,6 +1005,20 @@ class ProtectionLifecycleInstrumentedTest {
         instrumentation.runOnMainSync {
             val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
             event.packageName = fixturePackage
+            try {
+                ScreenProtectionAccessibilityService.dispatchAccessibilityEventForTest(event)
+            } finally {
+                event.recycle()
+            }
+        }
+    }
+
+    private fun invalidateMaskGenerationWithoutSchedulingCapture() {
+        instrumentation.runOnMainSync {
+            val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+            // ScreenVeil's own package is a deliberate no-scan path: it clears stale masks and
+            // advances maskGeneration, but does not schedule another screenshot.
+            event.packageName = context.packageName
             try {
                 ScreenProtectionAccessibilityService.dispatchAccessibilityEventForTest(event)
             } finally {

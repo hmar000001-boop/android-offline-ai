@@ -57,9 +57,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.screenveil.app.capture.ProtectionStatus
+import dev.screenveil.app.capture.ProtectionNotifier
 import dev.screenveil.app.capture.ScreenProtectionAccessibilityService
 import dev.screenveil.app.diagnostics.DiagnosticLog
-import dev.screenveil.app.model.GemmaModelCatalog
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
 import dev.screenveil.app.model.SpecializedModelCatalog
@@ -73,12 +73,14 @@ class MainActivity : ComponentActivity() {
     // Android 13+ requires a runtime grant for the notification that carries the Stop button.
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (!granted) {
+            if (!granted || !notificationsEnabled()) {
+                AppPreferences(this).setProtectionEnabled(false)
                 Toast.makeText(
                     this,
-                    "Notifications are off, so there is no Stop button in the notification shade. Add the ScreenVeil tile to Quick Settings as your emergency Stop.",
+                    "Protection was not started. ScreenVeil requires its notification Stop control to be available as an emergency exit. Enable notifications and try again.",
                     Toast.LENGTH_LONG
                 ).show()
+                return@registerForActivityResult
             }
             startServiceProtection()
         }
@@ -141,8 +143,19 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
+        if (!notificationsEnabled()) {
+            Toast.makeText(
+                this,
+                "Protection was not started because ScreenVeil notifications are disabled. Enable notifications to keep the emergency Stop action available.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
         startServiceProtection()
     }
+
+    private fun notificationsEnabled(): Boolean =
+        ProtectionNotifier.canShowStopNotification(this)
 
     private fun startServiceProtection() {
         AppPreferences(this).setProtectionEnabled(true)
@@ -315,29 +328,23 @@ private fun ScreenVeilHome(
                     }
                 }
                 Divider()
-                if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
-                    val selectedModels = selectedProfile.requiredModels
-                    Text(
-                        if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) "Balanced ensemble · no Gemma required" else "Fast specialist pipeline · no Gemma required",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text("${selectedModels.size} independently pretrained models, all executed locally after download:", style = MaterialTheme.typography.bodySmall)
+                val selectedModels = selectedProfile.requiredModels
+                if (selectedModels.isNotEmpty()) {
+                    Text("${selectedModels.size} required local model artifacts:", fontWeight = FontWeight.SemiBold)
                     selectedModels.forEach { model ->
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(model.displayName, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                                Text(if (model.id in installedModelIds) "Installed · hash checked on load" else "Not installed", color = if (model.id in installedModelIds) Color(0xFF22643C) else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    if (model.id in installedModelIds) "Installed · hash checked on load" else "Not installed",
+                                    color = if (model.id in installedModelIds) Color(0xFF22643C) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                             }
-                            Text("${model.runtime} · declared ${model.license} · ${(model.minimumBytes / 1_000_000)}–${(model.maximumBytes / 1_000_000)} MB bounds", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${model.runtime} · ${model.license} · ${(model.minimumBytes / 1_000_000)}–${(model.maximumBytes / 1_000_000)} MB approved bounds", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("SHA-256 pinned · ${model.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                } else {
-                    val model = GemmaModelCatalog.selected
-                    Text(model.displayName, fontWeight = FontWeight.SemiBold)
-                    Text("Google LiteRT Community · ${model.license} · approximately 2.6 GB", style = MaterialTheme.typography.bodySmall)
-                    Text("Multimodal general-purpose screenshot analysis. Stored in private app storage; not bundled in the APK.", style = MaterialTheme.typography.bodyMedium)
-                    Text("SHA-256 pinned · ${model.repository}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 val requiredModels = selectedProfile.requiredModels
@@ -388,16 +395,16 @@ private fun ScreenVeilHome(
                     Text(downloadError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Network access is used only for model downloads initiated here. Downloads require HTTPS, approved hosts, bounded sizes and exact pinned SHA-256. Screen images are not uploaded; inference is local. No model is trained or fine-tuned. Balanced is about 60 MB; Fast about 38 MB; Gemma is a separate ~2.6 GB option. Hash verification confirms file identity, not model safety or accuracy.",
+                    "Network access is used only for model downloads initiated here. Downloads require HTTPS, approved hosts, bounded sizes and exact pinned SHA-256. Screen images are not uploaded; inference is local. Balanced is approximately 76–93 MB; Fast is approximately 54–63 MB; Gemma is approximately 2.6 GB plus the 16–17 MB segmenter. Actual downloads are checked against each model's individual byte bounds. Hash verification confirms file identity, not model safety or accuracy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
                     Text(
                         if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
-                            "Scope limitation: this profile has one person detector and two general NSFW classifiers, but NO approved clothing/swimwear classifier. The ViT scans nine overlapping screen tiles only when no person is detected. People with a moderate NSFW score are covered as uncertain; low-scoring people are covered only in strict mode. This is not semantic swimwear detection. It cannot guarantee every swimsuit, every image/video frame or every suggestive scene. Thresholds are uncalibrated and not Galaxy S24 FE benchmark results."
+                            "Scope limitation: this profile has one person detector and two general NSFW classifiers, but NO approved swimwear-specific classifier. When no person is detected, ViT scans nine overlapping screen tiles. A separate six-class segmentation model localizes body-skin and clothing pixels; it does not identify swimwear or guarantee every swimsuit, image/video frame or suggestive scene. Classifier thresholds are not calibrated on the Galaxy S24 FE."
                         } else {
-                            "Scope limitation: the fast profile has a person detector and Yahoo OpenNSFW only; it has NO approved clothing/swimwear classifier and no screen-tile fallback. People with a moderate NSFW score are covered as uncertain; low-scoring people are covered only in strict mode. It cannot guarantee swimwear, images without a detected person, cartoons or all suggestive scenes."
+                            "Scope limitation: the fast profile has a person detector and Yahoo OpenNSFW, plus body/clothing pixel segmentation. It has NO approved swimwear-specific classifier and no screen-tile fallback. It cannot guarantee swimwear, images without a detected person, cartoons or all suggestive scenes."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
@@ -461,7 +468,7 @@ private fun ScreenVeilHome(
         SectionTitle("Emergency stop and diagnostics")
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("If the screen is ever covered and you cannot use it: pull down the notification shade and tap Stop, or use the ScreenVeil Quick Settings tile (edit tiles, add ScreenVeil). Masks are lifted while the shade is open, and ScreenVeil pauses itself after 30 seconds of near-total coverage.", style = MaterialTheme.typography.bodySmall)
+                Text("Safety test mode: each protection session ends automatically after 5 minutes. Keep the ScreenVeil Stop notification available and add the ScreenVeil Quick Settings tile before testing. If coverage exceeds the hard pixel-mask limits, segmentation fails, capture stalls or inference exceeds its deadline, protection stops and the overlay is cleared.", style = MaterialTheme.typography.bodySmall)
                 Text("The diagnostic log holds events and counts only (no screenshots, text or app names) and never leaves the device unless you copy it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
@@ -487,7 +494,7 @@ private fun ScreenVeilHome(
         SectionTitle("Protection policy")
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                PolicyLine("All swimwear", "Always redact, including ordinary beach and sports swimwear")
+                PolicyLine("Swimwear", "No selectable profile has a validated swimwear-specific detector yet; swimwear may be missed")
                 PolicyLine("Suggestive", "Redact suggestive imagery, sexualized poses and revealing presentations")
                 PolicyLine("Explicit", "Redact explicit nudity and sexual activity")
                 PolicyLine("Ordinary content", "Allow ordinary clothing and non-suggestive media")
@@ -503,7 +510,10 @@ private fun ScreenVeilHome(
                 Text("• Internet access is used only when you explicitly download the models for the selected profile.")
                 Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")
                 Text("• Android rate-limits accessibility screenshots. Capture is event-triggered with periodic refresh, not a 30-FPS video recording. Fast video may be only partially inspected.", color = MaterialTheme.colorScheme.error)
-                Text("• During window changes or scrolling, previous localized masks are removed while the new screenshot is analyzed, so content can briefly be unprotected. Repeated capture, model or overlay failures pause protection and remove ScreenVeil's overlay; technical failures never place a full-window cover.", color = MaterialTheme.colorScheme.error)
+                Text("• During window changes or scrolling, previous localized masks are removed while the new screenshot is analyzed, so content can briefly be unprotected. Technical failures stop protection and clear the overlay; rectangular fallbacks are prohibited.", color = MaterialTheme.colorScheme.error)
+                Text("• R6 safety limits apply to every category, including EXPLICIT, SUGGESTIVE and SWIMWEAR: one final body/clothing mask may cover at most 35% and all masks together at most 45% of the application window. Sustained coverage at or above 35% for 3 seconds stops protection. The independent session limit is 5 minutes.", color = MaterialTheme.colorScheme.error)
+                Text("• Body segmentation is 256×256 and approximate. ScreenVeil blurs body-skin and clothing pixels selected by the segmenter; face, hair, accessories and background are left visible. Segmentation failure stops protection rather than reverting to a rectangular blur.", color = MaterialTheme.colorScheme.error)
+                Text("• A notification Stop action is required before protection can start. Add and test the Quick Settings Stop tile as a second emergency exit.", color = MaterialTheme.colorScheme.error)
                 Text("• Every model can miss content or classify it incorrectly. The fast profile does not classify all media types; Gemma may also return incorrect or delayed media boxes. This is an experimental application, not a guaranteed safety filter.", color = MaterialTheme.colorScheme.error)
                 Text("• Accessibility access is powerful. ScreenVeil uses events only to schedule screenshots and does not read window text, inspect view nodes, tap, or control other apps.", style = MaterialTheme.typography.bodySmall)
             }

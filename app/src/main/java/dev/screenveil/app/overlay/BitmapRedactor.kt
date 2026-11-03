@@ -5,10 +5,70 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import dev.screenveil.app.policy.RedactionEffect
+import dev.screenveil.app.model.BodySegmentationMask
+import android.graphics.Rect
 import kotlin.math.max
 import kotlin.math.min
 
 object BitmapRedactor {
+    /**
+     * Blurs/pixelates only body-skin and clothing pixels. Pixels outside the semantic mask are
+     * transparent, so the overlay does not cover the detector's entire rectangle.
+     */
+    fun redactMasked(
+        source: Bitmap,
+        effect: RedactionEffect,
+        intensity: Int,
+        bodyMask: BodySegmentationMask,
+        sourceRect: Rect,
+        frameWidth: Int,
+        frameHeight: Int
+    ): Bitmap {
+        require(bodyMask.frameWidth == frameWidth && bodyMask.frameHeight == frameHeight) {
+            "Body segmentation mask does not belong to this screenshot"
+        }
+        val effected = redact(source, effect, intensity)
+        try {
+            val width = effected.width
+            val height = effected.height
+            val pixels = IntArray(width * height)
+            effected.getPixels(pixels, 0, width, 0, 0, width, height)
+            var selected = 0
+            for (y in 0 until height) {
+                val frameY = sourceRect.top + (((y + 0.5) * sourceRect.height()) / height).toInt()
+                for (x in 0 until width) {
+                    val frameX = sourceRect.left + (((x + 0.5) * sourceRect.width()) / width).toInt()
+                    val index = y * width + x
+                    pixels[index] = if (bodyMask.protectsFramePixel(frameX, frameY)) {
+                        selected++
+                        pixels[index] or (0xff shl 24)
+                    } else {
+                        Color.TRANSPARENT
+                    }
+                }
+            }
+            check(selected > 0) {
+                "No body-skin or clothing pixels were found inside a flagged region"
+            }
+            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { masked ->
+                try {
+                    masked.setPixels(pixels, 0, width, 0, 0, width, height)
+                } catch (error: Throwable) {
+                    if (!masked.isRecycled) masked.recycle()
+                    throw error
+                }
+            }
+        } finally {
+            if (!effected.isRecycled) effected.recycle()
+        }
+    }
+
+    fun countVisiblePixels(bitmap: Bitmap): Int {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        return pixels.count { Color.alpha(it) > 0 }
+    }
+
     fun redact(source: Bitmap, effect: RedactionEffect, intensity: Int): Bitmap {
         val target = downscaleForProcessing(source, 1200)
         return when (effect) {

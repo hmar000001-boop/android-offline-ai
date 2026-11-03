@@ -1,76 +1,90 @@
-# Device validation plan — Samsung Galaxy S24 FE
+# Physical-device validation plan — Samsung Galaxy S24 FE (R6)
 
-This plan is mandatory before treating ScreenVeil as a practical daily-use filter. CI can prove source compilation and unit tests; only the physical Galaxy S24 FE can establish accessibility screenshot behavior, overlay alignment, model runtime compatibility, battery use and thermal stability.
+This plan is mandatory before considering ScreenVeil suitable for ordinary use. CI can establish source compilation, unit tests and synthetic lifecycle behavior. Only the physical Galaxy S24 FE can establish real segmentation/model compatibility, actual overlay alignment, One UI behavior, latency, memory, battery and thermal stability.
 
-## First run and model installation
+## Gate 0 — CI and model artifact integrity
 
-1. Install the debug APK on the Galaxy S24 FE (Android 14/API 34 or newer).
-2. Open ScreenVeil. Confirm there is no MediaProjection/screen-recording permission flow and no Display over other apps permission request.
-3. Keep **Balanced multi-model · offline** selected. Download the three specialist model artifacts. Confirm that each is reported installed only after the full SHA-256 has been checked.
-4. Test an interrupted download, redirect to an unapproved domain, mismatched SHA-256, oversized file and low-storage condition. Confirm incomplete files are deleted and no partial artifact is reported installed.
-5. Select **Fast specialized · offline** and verify only EfficientDet-Lite0 and Yahoo OpenNSFW are required. Select Gemma separately and verify its large download is not required by either specialist profile.
-6. Enable protection and manually enable ScreenVeil in Android Settings → Accessibility → Installed apps.
-7. Return to another application. Confirm the selected profile initializes the expected local runtime and starts screenshot inspection.
-8. Open ScreenVeil itself. Confirm its own UI is not scanned and no redaction overlay is displayed over ScreenVeil.
-9. Press Stop. Confirm screenshots stop and masks clear while the Android accessibility service remains enabled.
-10. Switch profiles while stopped, then start each profile. Confirm the previous runtime is closed and the selected one is initialized; a previously loaded Gemma runtime must not remain active under a specialist profile label.
+1. Run the R6 GitHub Actions workflow on the intended branch.
+2. Require green `build`, `release-build`, `emulator-lifecycle` API 34 and API 36 jobs.
+3. Manually run `verify-model-pins` using `workflow_dispatch`. It verifies all five catalog artifacts, including the optional large Gemma model; confirm the newly added Selfie Multiclass artifact passes the pinned SHA-256 and size bounds.
+4. The debug APK is the controlled test artifact. The R8 release APK is unsigned unless the repository signing secrets are configured. Do not install an unsigned release APK.
 
-## Specialist model contract tests
+## Gate 1 — install and emergency exits
 
-1. Confirm EfficientDet-Lite0 loads through standalone TensorFlow Lite Task Vision `0.4.4` and returns person boxes in screenshot pixel coordinates. Confirm no MediaPipe Tasks SDK dependency or analytics/telemetry network call is present in the resolved runtime graph.
-2. Verify Yahoo OpenNSFW ONNX input `[1,224,224,3]`, output `[P(sfw), P(nsfw)]`, preprocessing, full-frame inference and person-crop inference.
-3. Verify ViT-Tiny NSFW ONNX input `[1,3,384,384]`, output logits `[NSFW,safe]`, softmax order, full-frame and person-crop inference.
-4. In Balanced profile with no person boxes, verify all nine overlapping ViT tiles are evaluated and each positive tile is redacted as a whole region.
-5. With one or more person detections, verify the app does not silently run tile scanning; record any media outside person boxes that is missed.
-6. Verify a person with a low NSFW score becomes `PERSON_LOW_RISK` (not `ALLOW`) and is covered only with strict mode on; a moderate score is `UNCERTAIN`. With the default uncertain-redaction setting on, verify it is covered. Record false positives on ordinary people.
-7. Pass malformed dimensions, non-finite scores, unknown output names and ONNX errors. Confirm bounded retries, visible error status, protection OFF and overlay cleared; never a full-window fallback.
-8. Confirm the Fast profile has no ViT runtime/file dependency and Balanced has all three specialist artifacts. Confirm neither specialist profile loads Gemma.
+1. Install the R6 debug APK. If Android reports a signature conflict with an earlier debug installation, remove the older app first; this may also remove locally downloaded model files.
+2. Open ScreenVeil. Confirm no MediaProjection/screen-recording permission flow and no Display over other apps permission request.
+3. Grant notification permission. Disable/re-enable ScreenVeil notification channel once to verify that Start is refused while the Stop notification cannot be shown.
+4. Add ScreenVeil's Quick Settings tile manually. Confirm it is labelled as a stop action; when protection is OFF, tapping it must open the app and must not start protection.
+5. Enable ScreenVeil manually in Android Settings → Accessibility. Confirm binding alone does not start protection.
+6. Confirm Start refuses until the required model artifacts are installed and the notification Stop control is available.
+7. Start protection and immediately verify the ongoing notification's Stop action. Verify the Quick Settings tile also stops protection, sets it OFF and removes every overlay pixel.
+8. Verify the Android system fallback: disabling ScreenVeil Accessibility or force-stopping the app clears the overlay.
 
-## Capture and window correctness
+## Gate 2 — model installation and initialization
 
-1. Test portrait/landscape, status/navigation bars, edge-to-edge app content, split screen, floating windows, popups and dialogs.
-2. Test scroll, rapid feed replacements and window changes while inference runs. Confirm stale generations and old capture sequences cannot overwrite the latest overlay.
-3. Test secure/DRM windows and screenshot rate limiting. Confirm Android restrictions are respected, localized masks are not replaced by a global cover and repeated capture errors pause protection.
-4. Force inference and overlay errors in a test build. Confirm the service pauses after three model failures, clears the overlay and leaves the app usable.
-5. Verify startup, service rebind and enabling Accessibility never start protection without an explicit Start tap. Confirm model loading never draws a full-window cover.
-6. Confirm content changes clear only localized masks and schedule a new capture; repeated events must never create a global cover.
+1. Select **Balanced multi-model · offline**. Download EfficientDet-Lite0, Yahoo OpenNSFW, ViT-Tiny NSFW and Google Selfie Multiclass. Require successful size and SHA-256 verification for each.
+2. Confirm the segmentation model is loaded from its verified private file using TFLite Task Vision `0.4.4`; no MediaPipe Tasks runtime or analytics dependency is introduced.
+3. Confirm Fast requires EfficientDet, OpenNSFW and the same segmentation model, but not ViT or Gemma.
+4. Confirm Gemma is separate and optional; its 2.6 GB download is not required by the specialist profiles.
+5. Test interrupted downloads, disallowed redirect, hash mismatch, size overflow and low-storage behavior; incomplete files must not be marked installed.
 
-## Representative moderation dataset
+## Gate 3 — body-mask rendering and coordinate mapping
 
-Use lawful, consented/licensed images and videos with human labels. Include:
+Use a lawful, consented image set and test:
 
-- bikinis, one-piece swimsuits, swim trunks, rash guards, sports swimwear, modest swimwear and cover-ups;
-- lingerie, suggestive poses, nudity and explicit sexual content;
-- ordinary beach, pool, fitness and skin-exposing but non-sexual images;
-- people who are small, partially hidden, overlapping, distant or cropped by a feed card;
-- no-person images, cartoons, drawings, memes, collages and screenshots;
-- multiple media regions and video frames from varied apps and aspect ratios.
+- One person centered, near each screen edge, small/distant, partially occluded and multiple people.
+- Portrait and landscape orientation; status/navigation bars; edge-to-edge; split screen; picture-in-picture; dialogs/popups and scrollable feeds.
+- People on photographs, video frames, thumbnails and collage tiles.
+- Varied lighting, backlighting, low contrast, diverse skin tones, different clothing and hair/head coverings.
 
-Measure per-category precision/recall, false-negative and false-positive rates, person-detection recall, region recall, bounding-box IoU and the proportion of screen area masked. Report Fast and Balanced separately. A high aggregate accuracy can hide poor recall for swim trunks, one-piece swimsuits and other swimwear. There is currently no admitted swimwear-specific classifier, so do not describe this dataset test as model validation until such a model is added.
+For each selected detection, inspect the overlay visually and with diagnostics:
 
-## Performance and thermal validation
+- Body-skin and clothes classes are selected; face, hair, background and accessories remain visible by the current policy.
+- The mask follows the selected body/clothing pixels and is not a rectangular crop.
+- Dilation does not spread into adjacent UI or outside the candidate geometry.
+- Screenshot-to-mask and mask-to-overlay coordinates align; no scaling, letterboxing or window-origin offset.
+- A missing, empty, malformed or misaligned segmentation result stops protection and clears masks. There must be no rectangular fallback.
+- No model output can bypass the 35% per-region and 45% combined final-pixel coverage limits, including EXPLICIT, SUGGESTIVE and SWIMWEAR categories.
 
-Run each profile for at least 30 minutes and record:
+## Gate 4 — deliberate safety fault injection
 
-- model download size, hash-verification time and initialization time;
-- ONNX/TFLite first-inference and steady-state time;
-- P50/P95 time from screenshot request to overlay commit;
-- GPU/CPU use, peak RAM/PSS/native heap and app process restarts;
-- battery drain, thermal throttling and device temperature;
-- screenshot success / rate-limit rate and events missed between samples;
-- behavior at 0.75, 1.5, 3 and 5 second intervals.
+Use the debug instrumentation hooks or a dedicated test build. Never rely on a real false positive to test a stop mechanism.
 
-Balanced adds a second classifier and a possible nine-tile fallback; it may be slower than Fast. Do not assume the Galaxy S24 FE can sustain either profile before measuring it.
+| Injection | Required result |
+|---|---|
+| One EXPLICIT full-screen box | No full-window rectangle; final body mask is checked against hard limits; unsafe output stops/clears. |
+| All nine Balanced fallback tiles positive | Union mask cannot exceed 45%; unsafe output stops/clears. |
+| Many confirmed regions | No category exemption; same universal limits. |
+| One mask above 35% | Reject and stop; do not shrink it. |
+| Combined mask above 45% | Reject and stop before showing it. |
+| Combined coverage at or above 35% for 3 seconds | Independent coverage watchdog stops and clears. |
+| Inference worker deliberately blocked | 8-second deadline stops, clears and invalidates late result; process poison prevents Accessibility rebind from spawning another worker. Force-stop the app process before retrying. |
+| Screenshot callback deliberately withheld | 5-second deadline stops and clears; process poison prevents Accessibility rebind from spawning another worker. Force-stop the app process before retrying. |
+| Segmentation unavailable/throws/returns empty | Stop and clear; no rectangle fallback. |
+| Session runs for its maximum | Stop after **5 minutes** and clear the overlay. |
+
+Also test window change, rapid scroll, Android notification shade/Quick Settings, lock screen and `FLAG_SECURE` denial. Verify Stop remains reachable and masks are not drawn over system panels.
+
+## Gate 5 — moderation quality
+
+The current classifiers are general NSFW classifiers, not validated swimwear classifiers. Use lawful, consented/licensed test data with human labels covering explicit content, nudity, lingerie, suggestive poses, bikinis, one-piece swimsuits, swim trunks, rash guards, modest swimwear, ordinary beach/pool/fitness images, ordinary skin-exposing content, drawings, cartoons, memes, images with no people and multiple media regions.
+
+Measure per-category precision/recall, false-negative/false-positive rates, person-detection recall, region recall, mask IoU against hand-labelled body/clothing pixels, and fraction of screen pixels redacted. Report Balanced and Fast separately. Do not infer swimwear accuracy from general NSFW scores or segmentation categories.
+
+## Gate 6 — performance and stability
+
+For each selectable profile, record:
+
+- Model download size, hash verification and initialization time.
+- First-inference and steady-state latency for detector, classifier and segmenter.
+- P50/P95 screenshot-request-to-overlay-commit latency.
+- Process PSS, native heap and peak RAM.
+- CPU/GPU/NPU usage and whether the runtime is actually accelerated on the Exynos 2400e (do not assume NPU use).
+- Battery drain, device temperature, thermal throttling and process restarts.
+- Capture rate-limits, screenshot failures and events missed between samples.
+
+The 256×256 Google segmenter has published reference benchmarks on a Pixel 6, not the Galaxy S24 FE. Do not transfer those values to this phone. Determine whether one segmentation per screenshot meets the 8-second deadline with the selected profile and screenshot interval.
 
 ## Stop criteria
 
-Do not recommend daily use if the app crashes, leaves persistent misaligned overlays, materially misses target content, causes disruptive false positives, cannot retain a model in memory, destabilizes other apps, consumes excessive battery or thermally throttles. This application samples screenshots; it is not a guaranteed frame-by-frame video filter.
-
-## 1.5.2 additions (screen-blur incident)
-
-1. Open a full-screen portrait photo, a video call and a social feed with many faces. With default settings the whole screen must NOT be covered; with strict mode on, expect heavy coverage and confirm the Stop notification and Quick Settings tile both stop it.
-2. Pull down the notification shade while a mask is shown: the mask must disappear while the shade is open and return afterwards.
-3. Force a long full-screen cover (strict mode on a full-screen portrait): protection must pause after 30 s and show the "paused" notification.
-4. Deny the notification permission: Start must still work and a toast must point to the Quick Settings tile.
-5. After any incident use **Copy log** in the app and attach the text.
-6. Check blur strength on a full-screen photo: shapes must not be recognizable.
+Do not recommend ordinary/daily use if any mask exceeds a hard limit, Stop fails to remove the overlay, segmentation misaligns, the app leaves a persistent overlay, real models fail to initialize, relevant content is materially missed, false positives are disruptive, the app crashes, memory/thermal behavior is unstable, or the five-minute session does not stop reliably. ScreenVeil is a sampled screenshot filter, not a guaranteed frame-by-frame video filter.

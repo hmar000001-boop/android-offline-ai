@@ -14,3 +14,7 @@ Thumbs.db
 *.litertlm
 *.litertlm.part
 screen-frame-*.jpg
+
+# Downloaded only by the emulator job for the real segmentation runtime smoke test
+app/src/androidTest/assets/ci-models/*.tflite
+app/src/androidTest/assets/ci-models/*.part

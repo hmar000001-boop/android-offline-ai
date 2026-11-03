@@ -10,9 +10,10 @@ class ModelCatalogPolicyTest {
         val models = SpecializedModelCatalog.all
         val ids = models.map { it.id }.toSet()
         assertEquals(
-            setOf(ModelIds.GEMMA, ModelIds.PERSON_DETECTOR, ModelIds.OPEN_NSFW, ModelIds.VIT_NSFW),
+            setOf(ModelIds.GEMMA, ModelIds.PERSON_DETECTOR, ModelIds.OPEN_NSFW, ModelIds.VIT_NSFW, ModelIds.BODY_SEGMENTER),
             ids
         )
+        assertTrue(ModelIds.BODY_SEGMENTER in ids)
         assertFalse(ids.any { it.contains("electblake") || it.contains("clothing") })
     }
 
@@ -31,8 +32,14 @@ class ModelCatalogPolicyTest {
         }
     }
 
-    @Test fun optionalGemmaProfileDoesNotPullSpecialists() {
-        assertEquals(listOf(GemmaModelCatalog.selected), ModelProfile.GEMMA_VISION.requiredModels)
+    @Test fun everyProfileRequiresTheBodySegmentationModel() {
+        assertTrue(ModelProfile.BALANCED_SPECIALIZED.requiredModels.any { it.id == ModelIds.BODY_SEGMENTER })
+        assertTrue(ModelProfile.FAST_SPECIALIZED.requiredModels.any { it.id == ModelIds.BODY_SEGMENTER })
+        assertTrue(ModelProfile.GEMMA_VISION.requiredModels.any { it.id == ModelIds.BODY_SEGMENTER })
+    }
+
+    @Test fun optionalGemmaProfileIncludesGemmaAndSegmentationOnly() {
+        assertEquals(setOf(ModelIds.GEMMA, ModelIds.BODY_SEGMENTER), ModelProfile.GEMMA_VISION.requiredModels.map { it.id }.toSet())
     }
 
     @Test fun unvalidatedOpenImagesCandidateIsNotInDownloadAllowList() {

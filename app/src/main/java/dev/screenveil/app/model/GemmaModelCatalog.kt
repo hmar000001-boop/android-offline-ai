@@ -42,6 +42,7 @@ object ModelIds {
     const val PERSON_DETECTOR = "google-efficientdet-lite0-f32"
     const val OPEN_NSFW = "yahoo-open-nsfw-onnx"
     const val VIT_NSFW = "marqo-vit-tiny-nsfw-onnx"
+    const val BODY_SEGMENTER = "google-selfie-multiclass-256-tflite"
 }
 
 object SpecializedModelCatalog {
@@ -87,9 +88,26 @@ object SpecializedModelCatalog {
         runtime = "ONNX Runtime"
     )
 
-    // Fast runs person detection plus one NSFW classifier. Balanced adds an independent ViT
-    // classifier and a tiled fallback. Neither specialist profile depends on Gemma.
-    val fastProfileModels = listOf(personDetector, openNsfw)
-    val ensembleProfileModels = fastProfileModels + vitNsfwClassifier
+    val bodySegmenter = ApprovedModelArtifact(
+        id = ModelIds.BODY_SEGMENTER,
+        displayName = "Google Selfie Multiclass · body/clothing segmentation",
+        repository = "Google MediaPipe SelfieMulticlass 256x256",
+        fileName = "selfie_multiclass_256x256.tflite",
+        downloadUrl = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite",
+        // SHA-256 independently recorded for the same named upstream model artifact in multiple
+        // verified mirrors. CI downloads the official Google URL and must match this exact digest.
+        sha256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+        minimumBytes = 16_000_000L,
+        maximumBytes = 17_000_000L,
+        license = "Apache-2.0 (Google MediaPipe model card)",
+        sourceUrl = "https://developers.google.com/edge/mediapipe/solutions/vision/image_segmenter",
+        runtime = "TensorFlow Lite Task Vision · local category-mask segmentation"
+    )
+
+    // Every profile requires the same local human segmentation stage. Detectors decide whether
+    // content is sensitive; segmentation only limits the overlay to body-skin and clothing pixels.
+    // Fast uses one NSFW classifier; Balanced adds ViT and its tile fallback. Neither needs Gemma.
+    val fastProfileModels = listOf(personDetector, openNsfw, bodySegmenter)
+    val ensembleProfileModels = listOf(personDetector, openNsfw, vitNsfwClassifier, bodySegmenter)
     val all = listOf(GemmaModelCatalog.selected) + ensembleProfileModels
 }

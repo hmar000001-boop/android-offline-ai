@@ -1,3 +1,5 @@
+> HISTORICAL R1.5.2 REVIEW — this describes the old policy that existed before R6. It is not the current implementation. R6 safety limits are documented in README.md, SECURITY.md and MODEL_GOVERNANCE.md.
+
 # 1.5.2 - fixes from the deep code review and the full-screen-blur incident
 
 Not validated: no Gradle build, unit test or emulator run happened when these changes were written. Run the workflow and a physical-device pass (`DEVICE_VALIDATION.md`) before relying on them.

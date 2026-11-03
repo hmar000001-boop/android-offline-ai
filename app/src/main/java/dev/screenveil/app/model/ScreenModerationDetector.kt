@@ -14,7 +14,6 @@ import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import dev.screenveil.app.policy.ContentDecision
-import dev.screenveil.app.policy.CoveragePolicy
 import org.json.JSONObject
 import java.io.File
 
@@ -254,29 +253,23 @@ data class NormalizedBox(val left: Int, val top: Int, val right: Int, val bottom
 data class DetectedMediaRegion(
     val box: NormalizedBox,
     val decision: ContentDecision,
-    val mediaType: String
+    val mediaType: String,
+    /** Frame-aligned body/clothing pixel mask attached by the service before rendering. */
+    val bodyMask: BodySegmentationMask? = null
 )
 
 data class DetectionResult(
     val regions: List<DetectedMediaRegion>,
     val parseSucceeded: Boolean,
-    val diagnostic: String? = null
+    val diagnostic: String? = null,
+    /** A bounded-output violation that must stop immediately, not enter the ordinary retry path. */
+    val safetyViolation: Boolean = false
 )
-
-private fun sensitivityRank(decision: ContentDecision): Int = when (decision) {
-    ContentDecision.EXPLICIT -> 0
-    ContentDecision.SUGGESTIVE -> 1
-    ContentDecision.SWIMWEAR -> 2
-    ContentDecision.UNCERTAIN -> 3
-    ContentDecision.PERSON_LOW_RISK -> 4
-    ContentDecision.ALLOW -> 5
-}
 
 /** Strict parser for the schema-constrained LiteRT-LM JSON response. */
 object DetectionResponseParser {
-    private const val MAX_REGIONS = 24
-    // Beyond this the response is treated as malformed. Between MAX_REGIONS and this limit the most
-    // sensitive regions are kept, rather than pausing protection (fail-open) on a dense gallery.
+    // Parse up to a hard memory bound. The policy layer applies its 24-redaction limit only
+    // after ALLOW regions are filtered; no candidate is silently dropped.
     private const val HARD_MAX_REGIONS = 64
     private val ROOT_KEYS = setOf("regions")
     private val REGION_KEYS = setOf("box", "media_type", "decision")
@@ -293,7 +286,11 @@ object DetectionResponseParser {
             }
             val array = root.getJSONArray("regions")
             if (array.length() > HARD_MAX_REGIONS) {
-                return DetectionResult(emptyList(), false, "Too many media regions")
+                return DetectionResult(
+                    emptyList(), true,
+                    "Model returned ${array.length()} media regions; hard parser bound is $HARD_MAX_REGIONS",
+                    safetyViolation = true
+                )
             }
 
             val parsed = ArrayList<DetectedMediaRegion>(array.length())
@@ -340,17 +337,10 @@ object DetectionResponseParser {
                 }
                 parsed += DetectedMediaRegion(NormalizedBox(left, top, right, bottom), decision, mediaType)
             }
-            if (parsed.size <= MAX_REGIONS) return DetectionResult(parsed, true)
-            val selected = parsed
-                .sortedWith(
-                    compareBy<DetectedMediaRegion> { sensitivityRank(it.decision) }
-                        .thenByDescending { CoveragePolicy.areaFraction(it.box) }
-                )
-                .take(MAX_REGIONS)
             DetectionResult(
-                selected,
+                parsed,
                 true,
-                "Model returned ${parsed.size} regions; kept the $MAX_REGIONS most sensitive"
+                if (parsed.size > 24) "Model returned ${parsed.size} regions; redaction candidates will be checked against the strict 24-region safety limit" else null
             )
         } catch (error: Exception) {
             DetectionResult(emptyList(), false, "Invalid structured model response: ${error.javaClass.simpleName}")

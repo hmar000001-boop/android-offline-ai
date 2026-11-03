@@ -1,112 +1,106 @@
-# ScreenVeil
+# ScreenVeil 1.6.0 (R6)
 
-ScreenVeil is an experimental Android-wide screen-content redaction app. It inspects screenshots of the active application window through an explicitly enabled Android `AccessibilityService`, then applies blur, pixelation or an opaque cover to detected regions. It does not use `MediaProjection`, a screen-recording session or `SYSTEM_ALERT_WINDOW`.
+ScreenVeil is an experimental Android-wide, offline screen-content redaction application. After the user explicitly enables its Android `AccessibilityService` and taps **Start protection**, it captures the active application window with Android's `takeScreenshotOfWindow()` API, performs local model inference, and draws a non-focusable, non-touchable accessibility overlay over selected pixels. It does not use `MediaProjection` or `SYSTEM_ALERT_WINDOW`.
 
-**ScreenVeil is experimental software, not a certified safety product.** Models can miss content or produce false positives. It cannot guarantee frame-by-frame video protection, detection of every swimsuit, or protection of Android secure/DRM windows. Do not use it as the sole child-safety, workplace-safety or other high-assurance control.
+**This is experimental software, not a certified safety product.** Model accuracy, segmentation quality, latency, battery and thermal behavior have not yet been validated on the Samsung Galaxy S24 FE. Do not treat it as a high-assurance child-safety control or assume it catches every explicit image, swimsuit, video frame or application layout.
 
-## Model approval policy
+## R6 safety contract
 
-This project uses a **balanced model-approval policy**:
+The safety policy is independent of model labels and confidence:
 
-- accept established research/open-source projects and named publishers when the artifact, license declaration, source revision and runtime are sufficiently documented;
-- pin an exact artifact SHA-256 and enforce download-size bounds;
-- permit internet access only for explicit, user-initiated downloads from the fixed catalog and approved HTTPS hosts;
-- run all inference locally; screenshots and inference results are not uploaded;
-- do not allow arbitrary model URLs, user-imported model files, training or fine-tuning;
-- distinguish artifact integrity from model safety, publisher trust and detection accuracy. A matching hash proves only that the bytes match the catalog.
+- Maximum final redaction mask for one detection region: **35% of the application window**.
+- Maximum union of all rendered masks: **45% of the application window**.
+- These limits apply to every decision, including `EXPLICIT`, `SUGGESTIVE`, `SWIMWEAR` and `UNCERTAIN`. No category bypass exists.
+- A mask that exceeds a hard limit is rejected and protection stops; it is not silently shrunk to an arbitrary rectangle.
+- If combined visible mask coverage remains at or above **35% for 3 seconds**, an independent scheduled watchdog stops protection and clears the overlay.
+- Maximum protection session during this test period: **5 minutes**. Protection then switches OFF and removes the overlay.
+- Screenshot callback deadline: **5 seconds**. Inference deadline: **8 seconds**. A deadline expiry stops protection, invalidates late results and poisons the current process; after a hard worker timeout, force-stop ScreenVeil from Android App Info before trying again.
+- Missing, malformed or failed body segmentation stops protection. There is **no rectangular fallback**.
+- Start is refused unless Android notifications and the ongoing Stop notification channel are available. The Quick Settings tile is a separate Stop-only action; the user should add it before testing.
 
-The catalog intentionally excludes candidates whose licensing, artifact provenance, runtime compatibility or offline behavior do not meet this policy. See [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
+The watchdog callbacks run on Android's main looper, separately from the screenshot and inference worker executors. No application-level timer can guarantee recovery if Android's main process/looper itself is completely unresponsive; Android process/service teardown remains the system-level fallback.
+
+## How redaction works
+
+Detection and redaction localization are separate operations. EfficientDet/OpenNSFW/ViT/Gemma decide which candidate regions should be redacted. A separately pinned Google Selfie Multiclass segmentation model then classifies screenshot pixels. R6 selects only:
+
+| Segmentation class | Class ID | R6 rendering |
+|---|---:|---|
+| Background | 0 | Visible |
+| Hair | 1 | Visible |
+| Body skin | 2 | Redacted when inside a selected detection region |
+| Face skin | 3 | Visible |
+| Clothes | 4 | Redacted when inside a selected detection region |
+| Accessories / others | 5 | Visible |
+
+The renderer applies the selected blur, pixelation or opaque effect only to selected body-skin/clothing pixels. The remainder of each detection rectangle is transparent. A small mask dilation is applied to reduce boundary leakage, and coverage is checked on the resulting rendered bitmap. The 256×256 segmenter is coarse and designed for person/selfie segmentation; S24 FE alignment and quality still require real-device validation.
+
+Segmentation is a localization model, **not a swimwear classifier**. It cannot decide whether a garment is a bikini, one-piece swimsuit, swim trunks, lingerie or ordinary clothing. The current approved catalog still has no validated swimwear-specific detector.
 
 ## Approved model catalog
 
-The default **Balanced multi-model · offline** profile uses three pretrained artifacts and does not require Gemma:
+All artifacts are user-initiated downloads from fixed HTTPS URLs. The app verifies byte-size bounds and exact SHA-256 before a model can be loaded. Hash verification proves byte identity with this catalog; it does not prove accuracy or model safety.
 
-| Model | Responsibility | Runtime | Declared license / provenance | Important limitation |
-|---|---|---|---|---|
-| Google EfficientDet-Lite0 | Locate people in a screenshot | Standalone TensorFlow Lite Task Vision | Apache-2.0 model; model bytes pinned | Person detector only; it does not classify clothing or swimwear |
-| Yahoo OpenNSFW ResNet-50 ONNX | General binary NSFW score | ONNX Runtime Android | Original Yahoo weights BSD-2-Clause; third-party ONNX conversion has separate notices | Old general pornographic-content classifier; not a swimwear classifier |
-| ViT-Tiny NSFW 384 ONNX | Independent general NSFW score and tiled fallback | ONNX Runtime Android | Apache-2.0 declared by the ONNX repository; source/conversion evidence documented | Repository-declared license and self-reported evaluation; not independently security-audited |
+| Model | Responsibility | Runtime | Important limitation |
+|---|---|---|---|
+| Google EfficientDet-Lite0 | Person/object localization | TensorFlow Lite Task Vision | Not an NSFW or clothing classifier |
+| Yahoo OpenNSFW ResNet-50 | General binary NSFW score | ONNX Runtime | Not a swimsuit classifier; old general classifier |
+| ViT-Tiny NSFW 384 | Second general NSFW score and Balanced tile fallback | ONNX Runtime | Not a swimsuit classifier; publisher-reported metrics only |
+| Google Selfie Multiclass 256×256 | Pixel classes for body skin, face, clothes, hair, accessories and background | TensorFlow Lite Task Vision | Not a content classifier; coarse mask; quality must be measured on device |
+| Gemma 4 E2B Instruct | Optional multimodal screenshot analysis | LiteRT-LM | Experimental, large download, prompt-injection exposure; prefer a specialist profile |
 
-Two specialist profiles are selectable:
+The segmentation model is pinned to Google's versioned `float32/1` artifact, Apache-2.0 as declared by its Google model card. See [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full artifact URLs, hashes, bounds and provenance.
 
-- **Balanced multi-model · offline (default):** EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW. The ViT also scans up to nine overlapping screen tiles if no person is detected. Approximately 60 MB of model artifacts based on catalog bounds.
-- **Fast specialized · offline:** EfficientDet-Lite0 + Yahoo OpenNSFW. Approximately 38 MB. It omits the second classifier and tile fallback.
+### Profiles
 
-**Gemma 4 E2B Instruct is an optional, separate profile.** It is a general-purpose vision model with a roughly 2.6 GB download; neither specialist profile depends on it. The official Gemma license is Apache-2.0, while the Android LiteRT-LM packaging is separately pinned and documented.
+- **Balanced multi-model · offline (default):** EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW + Selfie Multiclass segmentation. Approximately **76–93 MB** based on the approved artifact bounds. If no people are detected, ViT may scan up to nine overlapping screen tiles; the final overlay still intersects those candidate regions with the body/clothing segmentation mask and must pass the same hard coverage gate.
+- **Fast specialized · offline:** EfficientDet-Lite0 + Yahoo OpenNSFW + Selfie Multiclass segmentation. Approximately **54–63 MB**. No ViT tile fallback.
+- **Gemma 4 vision · optional:** Gemma 4 E2B plus Selfie Multiclass segmentation. About **2.6 GB plus 16–17 MB**. Text visible in screenshots can steer a language model; this profile remains experimental.
+- **Swimwear-aware · Google Open Images:** disabled and not downloadable until an Android artifact, label map, runtime contract, license and exact hash are verified.
 
-A fourth profile entry, **Swimwear-aware · Google Open Images**, is now shown as pending but is deliberately disabled. It is intended to use Google's SSD MobileNet V2 trained on Open Images V4, whose 600-class outputs include `Swimwear` and `Person`. Google's published checkpoint declares Apache-2.0, but the reviewed artifact is a SavedModel, not a hash-pinned Android TFLite model. The app will not download or execute an unconverted/unverified model. Conversion, output/label validation, exact SHA-256 pinning and S24 FE testing are required before it can be enabled. The existing EfficientDet-Lite0 profiles are preserved and unchanged except for the coordinate-normalization correction.
+A wider model review dated 2026-11-03 also identified an experimental swimwear-labelled RT-DETRv2 detector and a five-class clothing ONNX classifier. Neither is approved for safety decisions: their training/evaluation limitations, missing neutral/reject semantics, and Android validation gaps are documented in [`docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md`](docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md). The active catalog and R6 runtime are intentionally unchanged. A second research addendum audits the Marqo ONNX classifier already integrated in R6 and compares further image-safety candidates (Freepik EVA02, Falconsai, TostAI, Blue-Eye and ShieldGemma 2) plus a product-photo swimwear model (Genlook); it recommends evaluation only and does not change the runtime. See [`docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md`](docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md).
 
-Until that candidate passes admission, no currently approved model provides validated swimwear-specific detection. In the specialist pipeline, a person region that is not positively classified as NSFW remains `UNCERTAIN`; the app's default conservative policy redacts uncertain regions. This is not equivalent to correctly recognizing every swimsuit, swim trunk, rash guard or sports swimsuit, and it can over-redact ordinary people. The two NSFW classifiers do not provide a swimwear label. See [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md).
+These are approximate catalog downloads, not guarantees about on-disk storage or RAM. Gemma needs substantially more memory than specialist profiles.
 
-## Model download and offline behavior
+## Conservative policy and known limits
 
-- Model downloads happen only after the user selects **Download and verify**.
-- Every catalog entry has a fixed HTTPS URL, approved host, SHA-256 and lower/upper byte bounds.
-- Redirects are followed manually; every redirect hop must remain HTTPS and on an approved hosting domain.
-- Downloaded bytes are streamed to a temporary file, bounded by the catalog maximum, hashed, and renamed into private app storage only after a full hash match.
-- Inference is local. The only application code that opens a network connection is `ModelInstaller`.
-- The standalone TensorFlow Lite Task Vision runtime is used for person detection; MediaPipe Tasks Vision is not a runtime dependency.
-- No analytics, telemetry, remote inference or model marketplace is implemented.
+- OpenNSFW and ViT are general NSFW classifiers. They do not recognize swimwear as a semantic class.
+- The two classifiers do not constitute an independent accuracy guarantee; current ensemble decisions and thresholds are engineering settings, not calibrated product metrics.
+- With **Redact uncertain content** enabled, uncertain person candidates can be selected for redaction; low-risk person regions are selected only when the strict setting is enabled. False positives on ordinary people remain possible.
+- Balanced tile detections do not imply the entire tile is blurred: only intersecting body-skin/clothing pixels inside approved candidate regions are rendered.
+- A false negative or content outside the candidate regions can remain visible. ScreenVeil samples screenshots; it is not a continuous frame-by-frame video filter.
+- Segmentation failure is fail-open: protection stops and masks are cleared rather than reverting to a large rectangle. This preserves device usability but content can be visible while protection is stopped or awaiting a fresh analysis.
+- Android may refuse screenshots of secure/DRM windows. ScreenVeil does not bypass these restrictions.
 
-A model can still be inaccurate or malicious despite a valid hash. The catalog is not an independent security certification. A complete dependency SBOM and physical-device test are release gates.
+## Capture, privacy and permissions
 
-## Interpretation and protection limits
+- Minimum Android version: Android 14 / API 34.
+- The user enables Accessibility manually and separately taps Start. Accessibility binding alone never starts protection.
+- The service uses active-window IDs/bounds and Accessibility event metadata only to schedule screenshot capture. It does not read accessibility view nodes, app text, content descriptions, click controls or perform gestures.
+- The overlay is a single `TYPE_ACCESSIBILITY_OVERLAY` window with `FLAG_NOT_FOCUSABLE` and `FLAG_NOT_TOUCHABLE`; it does not intercept taps.
+- Screenshots, segmentation masks and inference remain on-device. The only application network access is explicit model download from the fixed catalog. Download hosts still receive ordinary network metadata such as IP address and request time.
+- No telemetry, screenshot upload, remote inference, arbitrary model URL or model marketplace is implemented.
 
-- OpenNSFW and ViT-Tiny NSFW are general NSFW classifiers, not clothing classifiers. Their agreement does not prove that an image is safe.
-- In the specialist path, a person box that is not positively flagged is returned as `UNCERTAIN`. With **Redact uncertain content** enabled (the conservative default), that box is covered. This favors missed-allow reduction at the cost of substantial false-positive masking.
-- If no person boxes are detected, Balanced scans up to nine overlapping tiles with ViT. If one or more persons are detected, the tile fallback is not run; unrelated media outside those boxes can be missed.
-- Thresholds are engineering starting values, not calibrated performance results. No independent ScreenVeil dataset has established per-category precision, recall or false-negative rates.
-- The current approved catalog has no swimwear-specific model. The app must not claim reliable swimwear detection.
+## Emergency Stop
 
-## Product policy
+1. **Notification Stop:** required to start protection. If notification permission is revoked or the active notification channel is disabled, Start is refused.
+2. **Quick Settings Stop tile:** add ScreenVeil to Quick Settings before testing. It only stops; when protection is OFF, it opens the app and does not start protection.
+3. **Android system fallback:** disable ScreenVeil under Settings → Accessibility, or force-stop it from Android App Info.
 
-- Explicit and detected NSFW content is intended to be redacted.
-- Moderately NSFW-scoring person regions (`UNCERTAIN`) are redacted by default; low-scoring people are covered only with the **Cover every detected person (strict)** switch.
-- The user can choose blur, pixelation or opaque cover, change intensity and tune the screenshot interval.
-- The policy layer is deterministic after model output, but it cannot correct a model that misses a region or incorrectly labels content as safe.
+The notification shade/system panel is detected so stale masks are cleared while a large system panel is active. Validate this on Samsung One UI before relying on it.
 
-## Platform and capture design
+## Build and CI
 
-- Minimum Android version: Android 14 (API 34), required by `AccessibilityService.takeScreenshotOfWindow()`.
-- Android requires the user to enable ScreenVeil manually in Accessibility settings.
-- The service uses `takeScreenshotOfWindow(windowId, executor, callback)` and accessibility event metadata plus window IDs/bounds. It does not read view nodes, app text, content descriptions, click controls or perform gestures.
-- One `TYPE_ACCESSIBILITY_OVERLAY` window contains all composed redaction regions. It is non-focusable and non-touchable.
-- Android may refuse secure/DRM window captures or rate-limit screenshots. ScreenVeil does not bypass those restrictions.
-
-## Protection and failure behavior
-
-1. Protection defaults OFF. Enabling Accessibility never starts it; the user must return to ScreenVeil and tap Start protection.
-2. Startup and model loading never place a full-window cover. The first successful analysis may add localized masks.
-3. Window, scroll and content-change events clear stale localized geometry and debounce a fresh screenshot; they never replace it with a full-window obstruction.
-4. A single worker runs the selected inference pipeline; results with an older generation/sequence are discarded.
-5. Invalid local boxes are skipped. Model initialization, repeated model/capture failures and overlay rendering failures pause protection and clear the overlay. Capture failures get at most five consecutive retries; inference failures get at most three.
-6. The technical failure policy never leaves a full-window fallback on screen. This intentionally prioritizes device usability over fail-closed masking during startup or failure; content can be temporarily visible while analysis is pending or after protection pauses.
-7. The app reports model inference time separately from capture-request-to-overlay-commit time.
-
-The service samples screenshots; it is not a 30-FPS video filter. The default screenshot interval is 1.5 seconds, with a configurable minimum of 0.75 seconds. Content can change between samples and may be briefly visible before the app receives a useful accessibility event and applies a localized mask.
-
-## Build
-
-Pinned versions are in `settings.gradle.kts` and `app/build.gradle.kts`. CI uses JDK 21, Android SDK Platform 36 / Build Tools 36.0.0 and Gradle 8.14.6. Run:
+Pinned toolchain versions are in the Gradle settings/build files. Typical local validation command:
 
 ```bash
 ./gradlew --no-daemon clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-The GitHub Actions workflow builds a debug APK (for testing only; it is debuggable) and, in a separate job, an R8-minified release APK (signed when the `SCREENVEIL_KEYSTORE_BASE64`, `SCREENVEIL_KEYSTORE_PASSWORD`, `SCREENVEIL_KEY_ALIAS` and `SCREENVEIL_KEY_PASSWORD` secrets exist, otherwise unsigned), uploads unit-test / lint reports and the full Gradle log, then runs the Accessibility lifecycle instrumentation suite on Android API 34 and API 36 emulators and uploads its reports. The suite includes successful capture/inference-to-overlay flow with deterministic fake outputs, one test using Android's real `takeScreenshotOfWindow()` API, event-storm debounce, model/capture/render failures, Stop, interruption, service unbind and pixel-level localized-mask checks. See `docs/EMULATOR_TEST_COVERAGE.md`. The local wrapper script checks the pinned Gradle distribution SHA-256; the binary wrapper JAR is not included.
+The GitHub Actions workflow builds a debug APK for testing and a separate R8 release APK. Release signing is conditional on repository signing secrets; without them the release artifact is unsigned. Emulator lifecycle tests run on API 34 and API 36. The manual `verify-model-pins` job downloads and verifies all five model artifacts, including the large optional Gemma file.
 
-## Verification status
+R6 defines **58 unit tests** and **28 lifecycle instrumentation tests plus 1 real-model segmenter plumbing test (29 total)** in source. These are not claimed as passing until the R6 revision itself completes GitHub Actions. Instrumentation uses synthetic detector/segmenter outputs for deterministic lifecycle tests; it does not validate real model accuracy.
 
-The source archive includes tests for model-catalog policy, profiles, parser validation, pixel-to-normalized detector-box conversion, screenshot-to-overlay geometry and moderation policy. See [`docs/DELIVERY_VALIDATION.md`](docs/DELIVERY_VALIDATION.md) for checks performed in this environment and checks still outstanding. A successful Android Gradle build, Android test suite, model inference on device, and Galaxy S24 FE accuracy/performance measurements are required before any production/release claim.
+## Galaxy S24 FE validation is still required
 
-## Privacy and permissions
-
-- `INTERNET` is used only for explicit model downloads from the fixed catalog. Inference is local after installation.
-- Model files and temporary frames are stored in private app storage/cache; temporary frames are deleted after inference.
-- The user controls the Accessibility permission and protection start/stop state.
-- No analytics, telemetry or screenshot-upload endpoint is implemented.
-
-
-## Critical safety lifecycle update (1.5.1)
-
-Protection now defaults OFF and requires a separate Start tap after Accessibility is enabled. Startup, window changes, and technical failures do not place a full-window grey/opaque cover. Model initialization failure, repeated inference/capture failure, or overlay failure pauses protection and clears the overlay. See `docs/CRITICAL_SAFETY_HOTFIX.md`. Android instrumentation tests now exercise 17 lifecycle, capture, overlay and error scenarios on API 34 and API 36 emulators in GitHub Actions. Deterministic detector/frame/renderer seams are consulted only in debug builds. See `docs/EMULATOR_TEST_COVERAGE.md`; a successful CI run is still required.
+Before daily use, validate real model initialization, body mask alignment, false positives/misses, capture-to-overlay latency, memory, heat, battery, notification Stop, Quick Settings Stop, 5-minute auto-stop, coverage watchdog, screenshot timeout and inference timeout on the actual device. Follow [`docs/DEVICE_VALIDATION.md`](docs/DEVICE_VALIDATION.md). This source release is not a certification that those tests passed.

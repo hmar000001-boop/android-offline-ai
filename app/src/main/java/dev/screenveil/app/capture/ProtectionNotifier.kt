@@ -12,8 +12,8 @@ import dev.screenveil.app.R
 /**
  * User-visible escape hatch and status. While protection is ON an ongoing notification carries a
  * Stop action; if protection stops for a technical reason a separate alert says the screen is no
- * longer protected. Notifications are best effort: Android may hide them when the user has not
- * granted the notification permission, which is why a Quick Settings tile exists as well.
+ * longer protected. Start is refused unless the active notification channel is enabled and the
+ * Stop notification can be posted. The Quick Settings tile is a second, user-added emergency exit.
  */
 object ProtectionNotifier {
     private const val ACTIVE_CHANNEL = "screenveil_active"
@@ -39,16 +39,23 @@ object ProtectionNotifier {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
-    fun showActive(context: Context) {
-        runCatching {
-            val manager = manager(context) ?: return
-            ensureChannels(manager)
-            val stop = PendingIntent.getBroadcast(
+    /** Start is refused when Android would hide the primary notification Stop control. */
+    fun canShowStopNotification(context: Context): Boolean = runCatching {
+        val manager = manager(context) ?: return false
+        ensureChannels(manager)
+        manager.areNotificationsEnabled() &&
+            manager.getNotificationChannel(ACTIVE_CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
+    }.getOrDefault(false)
+
+    fun showActive(context: Context): Boolean = runCatching {
+        val manager = manager(context) ?: return false
+        ensureChannels(manager)
+        val stop = PendingIntent.getBroadcast(
                 context, 1,
                 Intent(context, StopProtectionReceiver::class.java).setAction(ACTION_STOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
-            val notification = NotificationCompat.Builder(context, ACTIVE_CHANNEL)
+        val notification = NotificationCompat.Builder(context, ACTIVE_CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_screenveil)
                 .setContentTitle("ScreenVeil protection is ON")
                 .setContentText("If the screen is covered, tap Stop.")
@@ -57,9 +64,9 @@ object ProtectionNotifier {
                 .setContentIntent(openAppIntent(context))
                 .addAction(0, "Stop", stop)
                 .build()
-            manager.notify(ACTIVE_ID, notification)
-        }
-    }
+        manager.notify(ACTIVE_ID, notification)
+        true
+    }.getOrDefault(false)
 
     fun clearActive(context: Context) {
         runCatching { manager(context)?.cancel(ACTIVE_ID) }

@@ -1,57 +1,54 @@
-# Emulator test coverage — ScreenVeil 1.5.1
+# Emulator test coverage — ScreenVeil 1.6.0 (R6)
 
-The instrumentation suite runs with `connectedDebugAndroidTest` on Android API 34 and API 36.
-It deliberately does not download model artifacts. A debug-only test seam injects a deterministic
-`ScreenContentDetector` and, for deterministic capture/error cases, a synthetic bitmap provider.
-The Android `AccessibilityService`, its main-thread scheduling, the inference worker, real
-`OverlayController`/`WindowManager`, and the service lifecycle remain active. One end-to-end test
-uses Android's real `takeScreenshotOfWindow()` API and a separate test-APK activity as the capture
-target. A fixture with `FLAG_SECURE` exercises Android's actual screenshot-denial callback.
+The R6 instrumentation suite is configured for `connectedDebugAndroidTest` on Android API 34 and API 36. The suite downloads only the pinned segmentation model needed by its real-runtime smoke test; detector and lifecycle cases inject deterministic outputs. A debug-only test seam provides synthetic detector, screenshot and segmentation implementations for those deterministic tests. The Android AccessibilityService, watchdog scheduling, screenshot flow, inference worker, real `OverlayController`/`WindowManager` and service lifecycle remain active where each test requires them.
 
-## Instrumentation tests
+## 28 lifecycle instrumentation tests plus 1 real-model segmenter plumbing test (29 total)
 
 | Test | What it exercises |
 |---|---|
-| `accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly` | Component matching accepts both short and fully-qualified Android flattened names and rejects literal shell-quote characters. |
-| `cleanInstallDefaultsProtectionToOff` | Fresh preferences default to OFF. |
-| `previousReleaseOnFlagIsMigratedToOff` | A legacy persisted ON flag is migrated to OFF. |
-| `enablingAccessibilityDoesNotStartProtectionOrCreateOverlay` | Android binds the real AccessibilityService, but binding alone does not start monitoring or add a window. |
-| `startWithoutVerifiedModelsStopsSafelyAndLeavesNoOverlay` | Explicit Start with no verified model artifacts is rejected, protection is reset OFF, and no overlay remains. |
-| `successfulSyntheticInferenceCreatesOnlyLocalizedAccessibilityOverlay` | Fake detector output and synthetic frame travel through the service workers and real OverlayController; a localized accessibility overlay window appears without opaque-cover state. |
-| `androidWindowScreenshotApiDeliversAFrameToTheDetector` | Real Android `takeScreenshotOfWindow()` captures the fixture activity; deterministic detector output is committed through the real localized overlay. |
-| `repeatedContentChangeEventsAreDebouncedToOneCapture` | Thirty synthetic `TYPE_WINDOW_CONTENT_CHANGED` events pass through the production event handler and coalesce into one capture. |
-| `repeatedModelFailuresStopAndClearAnExistingOverlay` | One successful localized mask is followed by three injected inference failures; the existing window is removed and protection is reset OFF. |
-| `repeatedCaptureFailuresStopAndClearAnExistingOverlay` | Five injected frame-capture failures cause a safety stop and remove the previously displayed localized mask. |
-| `androidSecureWindowScreenshotDenialPausesWithoutOverlay` | A real `FLAG_SECURE` fixture causes Android's screenshot-denial callback; repeated failures stop protection without adding an overlay. |
-| `overlayRenderingFailureStopsProtectionAndClearsRenderer` | An injected renderer failure returns `false`; service stops and invokes renderer cleanup. |
-| `explicitStopWhileLocalizedOverlayIsVisibleRemovesItImmediately` | Explicit Stop removes a real accessibility overlay window while it is visible. |
-| `accessibilityInterruptionStopsAndRemovesActiveOverlay` | Android's `onInterrupt()` path stops active protection and removes its localized overlay. |
-| `disablingAccessibilityWhileOverlayIsVisibleRemovesTheOverlay` | Disabling the service while a mask is visible causes unbind/shutdown cleanup. |
-| `overlayPreparationChangesOnlyTheDetectedRectangle` | Pixel-level assertion: only the specified normalized box is opaque; pixels outside remain transparent. |
-| `gaussianBlurChangesOnlyPixelsInsideTheDetectedRegion` | A checkerboard fixture proves the selected pixels are blurred while pixels outside the rectangle remain transparent. |
-| `allowOnlyResultsDoNotProduceAnOverlayBitmap` | ALLOW-only detector output creates no overlay bitmap. |
+| `accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly` | Parses Android flattened component names and rejects shell-quote characters. |
+| `cleanInstallDefaultsProtectionToOff` | Fresh install defaults to OFF. |
+| `previousReleaseOnFlagIsMigratedToOff` | Legacy persisted ON is migrated to OFF. |
+| `enablingAccessibilityDoesNotStartProtectionOrCreateOverlay` | Accessibility binding alone does not start protection or create an overlay. |
+| `startWithoutVerifiedModelsStopsSafelyAndLeavesNoOverlay` | Start without all required verified models is rejected. |
+| `successfulSyntheticInferenceCreatesOnlyLocalizedAccessibilityOverlay` | Synthetic detector and segmentation output pass through service workers and real localized overlay. |
+| `androidWindowScreenshotApiDeliversAFrameToTheDetector` | Android's real `takeScreenshotOfWindow()` callback delivers a fixture frame to the test detector. |
+| `repeatedContentChangeEventsAreDebouncedToOneCapture` | A 30-event content-change burst coalesces through the production event handler. |
+| `repeatedModelFailuresStopAndClearAnExistingOverlay` | Three consecutive injected model failures stop protection and clear an existing overlay. |
+| `repeatedCaptureFailuresStopAndClearAnExistingOverlay` | Five capture failures stop protection and clear an existing overlay. |
+| `androidSecureWindowScreenshotDenialPausesWithoutOverlay` | A real `FLAG_SECURE` fixture causes Android screenshot denial; protection pauses without a fallback overlay. |
+| `overlayRenderingFailureStopsProtectionAndClearsRenderer` | Renderer failure stops protection and clears renderer state. |
+| `explicitStopWhileLocalizedOverlayIsVisibleRemovesItImmediately` | Explicit Stop removes a visible localized overlay. |
+| `accessibilityInterruptionStopsAndRemovesActiveOverlay` | Android `onInterrupt()` stops protection and removes the overlay. |
+| `disablingAccessibilityWhileOverlayIsVisibleRemovesTheOverlay` | Service disable/unbind clears a visible overlay. |
+| `fiveMinuteSessionWatchdogStopsAndClearsTheOverlayWithoutBeingExtendedByStart` | Debug-shortened session timer calls the same safety stop and removes the overlay; a repeated Start request cannot extend the original deadline; production setting is 300,000 ms. |
+| `sustainedCoverageWatchdogStopsAndClearsTheOverlay` | Sustained high coverage triggers the independent scheduled watchdog and clears the overlay. |
+| `inferenceDeadlineStopsProtectionAndInvalidatesLateResults` | A stalled inference worker is poisoned process-wide; late results cannot redraw. |
+| `inferenceDeadlineStillStopsAfterWindowGenerationChanges` | A window-generation change cannot consume the deadline for a still-hung inference worker and verifies process-wide poison. |
+| `screenshotDeadlineStopsProtectionWhenCaptureCallbackStalls` | A missing screenshot callback triggers the screenshot watchdog, process-wide poison and stop/clear. |
+| `screenshotDeadlineStillStopsAfterWindowGenerationChanges` | A window-generation change cannot consume the deadline for a still-hung screenshot worker and verifies process-wide poison. |
+| `fullScreenDetectorBoxOnlyRedactsSegmentedBodyPixels` | A full-screen detection rectangle produces only the synthetic body-pixel mask; the rest remains transparent. |
+| `fullScreenConfirmedRegionIsRejectedByThePerRegionPixelLimit` | A full-screen EXPLICIT body mask is rejected by the 35% per-region cap. |
+| `fullScreenConfirmedDetectionStopsProtectionAndClearsTheOverlay` | The service receives a full-screen EXPLICIT result and actually stops/clears rather than displaying it. |
+| `confirmedRegionsCannotBypassTheCombinedPixelCoverageLimit` | Two confirmed masks covering 60% together are rejected by the 45% combined cap. |
+| `overlayPreparationChangesOnlyTheDetectedRectangle` | Pixel-level output remains constrained to the detection geometry. |
+| `gaussianBlurChangesOnlyPixelsInsideTheDetectedRegion` | Blur effect does not alter transparent pixels outside the selected body mask. |
+| `allowOnlyResultsDoNotProduceAnOverlayBitmap` | ALLOW-only results create no overlay bitmap. |
 
-## Debug-only test seams
+## 58 unit tests
 
-`ScreenVeilTestHooks` permits instrumentation to inject:
+Unit tests cover policy limits and category exemptions (none), model profiles/catalog pins, parser bounds, body-mask class mapping, letterbox coordinate mapping, mask-buffer validation, detection-box normalization, screenshot-to-overlay geometry and redaction bitmap behavior. The source tree currently contains 58 `@Test` methods under `app/src/test/java`.
 
-- a `ScreenContentDetector` implementation;
-- a deterministic screenshot-frame provider or a provider that throws;
-- a renderer subclass that simulates WindowManager/rendering failure.
+## What emulator tests do not prove
 
-The service consults these overrides only when `BuildConfig.DEBUG` is true. Release builds continue
-to use the fixed approved model catalog, Android's screenshot callback, and the real `OverlayController`.
+- The actual five downloaded production model artifacts initialize and infer correctly on-device.
+- Segmentation masks are accurate on app screenshots, multiple distant people, occlusions, varied skin tones, clothing types, GIFs or video.
+- Swimwear-specific detection; no approved model currently supplies that capability.
+- Accuracy, precision/recall, missed content or false-positive rate.
+- Samsung One UI screenshot behavior, overlay alignment, power management or notification behavior.
+- Galaxy S24 FE latency, RAM, GPU/CPU/NPU behavior, heat, thermal throttling or battery drain.
+- Recovery if Android's main process/looper itself is completely unresponsive.
 
-The injected detector is not evidence of model accuracy. It only drives deterministic service paths.
-The actual screenshot API test verifies capture plumbing, not the correctness of any pretrained model.
+The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. A separate instrumentation test loads the exact pinned Google segmentation artifact and invokes the real TFLite Task Vision segmenter on a synthetic frame; this proves artifact/runtime/API plumbing, not segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R6 emulator suite must not be presented as a real-model accuracy test.
 
-## What remains outside emulator coverage
-
-- Loading and inference with each real downloaded EfficientDet/OpenNSFW/ViT/Gemma artifact.
-- Model accuracy, especially swimwear-specific recall and false-positive rates.
-- Screenshot behavior on Samsung One UI and other manufacturer-specific accessibility implementations.
-- Real Galaxy S24 FE inference latency, memory, thermal throttling and battery drain.
-- Continuous video/frame-by-frame protection; ScreenVeil samples screenshots at intervals.
-- Long-duration tests over many hours and real third-party application layouts.
-
-No test result is considered passing until GitHub Actions executes this suite on both API levels and its reports are reviewed. The suite currently defines 18 instrumentation tests.
+**R6 status at package creation:** 28 lifecycle instrumentation test methods plus 1 real-model segmenter test (29 total), and 58 unit test methods are present in source. Gradle execution on API 34 and API 36 is still required; this document does not claim they have passed.

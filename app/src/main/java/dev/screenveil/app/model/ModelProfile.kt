@@ -9,12 +9,12 @@ enum class ModelProfile(
 ) {
     BALANCED_SPECIALIZED(
         title = "Balanced multi-model · offline",
-        description = "One EfficientDet person detector + two independent general NSFW classifiers, including a tiled fallback. No Gemma. This profile has no validated swimwear-specific detector; people with a moderate NSFW score are covered as uncertain, and every detected person can be covered with the strict-mode switch.",
+        description = "EfficientDet + two general NSFW classifiers + Google six-class human segmentation. Detection decides whether to redact; the pixel mask blurs body-skin and clothing while leaving background, hair and face visible. No Gemma. Swimwear-specific recognition is not yet validated.",
         requiredModels = SpecializedModelCatalog.ensembleProfileModels
     ),
     FAST_SPECIALIZED(
         title = "Fast specialized · offline",
-        description = "One EfficientDet person detector + one general NSFW classifier. No Gemma and no tile fallback. It does not classify clothing or guarantee swimwear detection; strict mode covers every detected person.",
+        description = "EfficientDet + one general NSFW classifier + Google six-class human segmentation. Redaction is restricted to body-skin and clothing pixels, not the person's rectangle. No Gemma or tile fallback. Swimwear-specific recognition is not validated.",
         requiredModels = SpecializedModelCatalog.fastProfileModels
     ),
     SWIMWEAR_AWARE(
@@ -28,8 +28,8 @@ enum class ModelProfile(
     ),
     GEMMA_VISION(
         title = "Gemma 4 vision · optional",
-        description = "Experimental. General-purpose multimodal screenshot analysis. Large download, higher memory use and slower startup. A language model can be steered by text shown on screen, so this profile can be tricked into skipping content; prefer Balanced.",
-        requiredModels = listOf(GemmaModelCatalog.selected)
+        description = "Experimental multimodal screenshot analysis plus the same body/clothing pixel segmentation and hard overlay safety limits. Large download, higher memory use and slower startup. Visible text can steer a language model; prefer Balanced.",
+        requiredModels = listOf(GemmaModelCatalog.selected, SpecializedModelCatalog.bodySegmenter)
     );
 
     companion object {

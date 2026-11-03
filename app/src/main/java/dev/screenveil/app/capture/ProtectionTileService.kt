@@ -9,8 +9,8 @@ import dev.screenveil.app.diagnostics.DiagnosticLog
 
 /**
  * Quick Settings tile: a one-tap Stop that does not depend on seeing or touching the covered
- * screen. Tapping it while protection is OFF asks the service to start, which still verifies
- * models first; if the service is not connected it opens the app instead.
+ * screen. It is deliberately Stop-only. Tapping it while protection is OFF opens the app, where
+ * model integrity and the mandatory notification Stop control are checked before Start.
  */
 class ProtectionTileService : TileService() {
     override fun onStartListening() {
@@ -26,9 +26,6 @@ class ProtectionTileService : TileService() {
             ProtectionNotifier.clearActive(this)
             DiagnosticLog.record(this, "STOP requested from Quick Settings tile")
             refresh(false)
-        } else if (ScreenProtectionAccessibilityService.requestStart()) {
-            DiagnosticLog.record(this, "START requested from Quick Settings tile")
-            refresh(true)
         } else {
             startActivityAndCollapse(
                 PendingIntent.getActivity(

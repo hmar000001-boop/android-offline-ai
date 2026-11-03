@@ -30,7 +30,7 @@ data class ModerationSettings(
 )
 
 object ModerationPolicy {
-    /** Swimwear is always redacted, regardless of scene or context, per the configured policy. */
+    /** A SWIMWEAR decision is redacted if a future validated detector supplies that decision. */
     fun shouldRedact(
         decision: ContentDecision,
         redactUncertain: Boolean,

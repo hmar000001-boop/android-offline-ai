@@ -43,17 +43,21 @@ class DetectionResponseParserTest {
     private fun region(decision: String, left: Int) =
         """{"box":[$left,100,${left + 40},200],"media_type":"image","decision":"$decision"}"""
 
-    @Test fun denseGalleryKeepsTheMostSensitiveRegionsInsteadOfFailingOpen() {
+    @Test fun denseGalleryIsNotSilentlyTruncatedBeforeTheSafetyPolicy() {
         val regions = (0 until 30).map { region(if (it >= 28) "explicit" else "allow", it * 30) }
-        val parsed = DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}]}""")
+        val parsed = DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}] }""")
         assertTrue(parsed.parseSucceeded)
-        assertEquals(24, parsed.regions.size)
+        assertFalse(parsed.safetyViolation)
+        assertEquals(30, parsed.regions.size)
         assertEquals(2, parsed.regions.count { it.decision == ContentDecision.EXPLICIT })
     }
 
-    @Test fun absurdRegionCountIsStillRejected() {
+    @Test fun absurdRegionCountTriggersImmediateSafetyViolation() {
         val regions = (0 until 70).map { region("allow", (it % 900)) }
-        assertFalse(DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}]}""").parseSucceeded)
+        val parsed = DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}] }""")
+        assertTrue(parsed.parseSucceeded)
+        assertTrue(parsed.safetyViolation)
+        assertTrue(parsed.regions.isEmpty())
     }
 
     @Test fun emptyRegionListIsAValidScreenWithNoDetectedMedia() {
@@ -71,27 +75,27 @@ class DetectionResponseParserTest {
         val response = """{"regions":[],"comment":"safe"}"""
         assertFalse(DetectionResponseParser.parse(response).parseSucceeded)
     }
+
     @Test fun acceptsMoreThanEightVisibleMediaRegions() {
         val regions = (0 until 12).joinToString(",") { index ->
             val left = index * 25
-            "{\"box\":[$left,100,${left + 20},200],\"media_type\":\"image\",\"decision\":\"swimwear\"}"
+            """{"box":[$left,100,${left + 20},200],"media_type":"image","decision":"swimwear"}"""
         }
-        val parsed = DetectionResponseParser.parse("{\"regions\":[$regions]}")
+        val parsed = DetectionResponseParser.parse("""{"regions":[$regions]}""")
         assertTrue(parsed.parseSucceeded)
         assertEquals(12, parsed.regions.size)
     }
 
-    @Test fun excessiveMediaRegionsKeepTheMostSensitiveInsteadOfPausingProtection() {
-        // 1.5.2 behavior change: pausing protection (fail-open) on a dense gallery was worse than
-        // keeping the 24 most sensitive regions. The truncation is reported in the diagnostic.
+    @Test fun moreThanTwentyFourRedactionCandidatesAreRetainedForThePolicyToReject() {
         val regions = (0 until 25).joinToString(",") { index ->
             val left = index * 10
-            "{\"box\":[$left,100,${left + 20},200],\"media_type\":\"image\",\"decision\":\"swimwear\"}"
+            """{"box":[$left,100,${left + 20},200],"media_type":"image","decision":"swimwear"}"""
         }
-        val parsed = DetectionResponseParser.parse("{\"regions\":[$regions]}")
+        val parsed = DetectionResponseParser.parse("""{"regions":[$regions]}""")
         assertTrue(parsed.parseSucceeded)
-        assertEquals(24, parsed.regions.size)
-        assertTrue(parsed.diagnostic!!.contains("kept the 24 most sensitive"))
+        assertEquals(25, parsed.regions.size)
+        org.junit.Assert.assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.limit(parsed.regions)
+        }
     }
-
 }

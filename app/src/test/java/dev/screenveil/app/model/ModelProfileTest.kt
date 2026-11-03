@@ -8,16 +8,17 @@ import org.junit.Test
 class ModelProfileTest {
     @Test fun balancedProfileUsesThreeSpecialistModelsAndNoGemma() {
         val ids = ModelProfile.BALANCED_SPECIALIZED.requiredModels.map { it.id }.toSet()
-        assertEquals(3, ids.size)
+        assertEquals(4, ids.size)
         assertTrue(ModelIds.PERSON_DETECTOR in ids)
         assertTrue(ModelIds.OPEN_NSFW in ids)
         assertTrue(ModelIds.VIT_NSFW in ids)
+        assertTrue(ModelIds.BODY_SEGMENTER in ids)
         assertFalse(ModelIds.GEMMA in ids)
     }
 
     @Test fun fastProfileUsesOnlyPersonDetectorAndOneNsfwClassifier() {
         val ids = ModelProfile.FAST_SPECIALIZED.requiredModels.map { it.id }.toSet()
-        assertEquals(setOf(ModelIds.PERSON_DETECTOR, ModelIds.OPEN_NSFW), ids)
+        assertEquals(setOf(ModelIds.PERSON_DETECTOR, ModelIds.OPEN_NSFW, ModelIds.BODY_SEGMENTER), ids)
         assertFalse(ModelIds.VIT_NSFW in ids)
         assertFalse(ModelIds.GEMMA in ids)
     }
@@ -31,7 +32,7 @@ class ModelProfileTest {
     }
 
     @Test fun gemmaIsAnIndependentOptionalProfile() {
-        assertEquals(listOf(ModelIds.GEMMA), ModelProfile.GEMMA_VISION.requiredModels.map { it.id })
+        assertEquals(setOf(ModelIds.GEMMA, ModelIds.BODY_SEGMENTER), ModelProfile.GEMMA_VISION.requiredModels.map { it.id }.toSet())
     }
 
     @Test fun missingOrUnknownStoredProfileDefaultsToBalanced() {

@@ -17,6 +17,9 @@ import dev.screenveil.app.AppPreferences
 import dev.screenveil.app.BuildConfig
 import dev.screenveil.app.diagnostics.DiagnosticLog
 import dev.screenveil.app.model.DetectedMediaRegion
+import dev.screenveil.app.model.HumanBodySegmenter
+import dev.screenveil.app.model.TfliteHumanBodySegmenter
+import dev.screenveil.app.model.SyntheticHumanBodySegmenter
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
 import dev.screenveil.app.model.ModelIds
@@ -51,23 +54,44 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private val inferenceExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "screenveil-inference").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
-    private val redactionExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "screenveil-redaction").apply { priority = Thread.NORM_PRIORITY }
-    }
-
     private val screenshotInFlight = AtomicBoolean(false)
     private val captureRequestedAfterScreenshot = AtomicBoolean(false)
     private val inferenceInFlight = AtomicBoolean(false)
-    private val redactionInFlight = AtomicBoolean(false)
     private val captureRequestedWhileBusy = AtomicBoolean(false)
     private val consecutiveCaptureFailures = AtomicInteger(0)
     private val modelInitializationStarted = AtomicBoolean(false)
     private val maskGeneration = AtomicLong(0L)
     private val captureSequence = AtomicLong(0L)
+    private val screenshotRequestSequence = AtomicLong(0L)
+    private val activeScreenshotRequestId = AtomicLong(0L)
+    private val inferenceRequestSequence = AtomicLong(0L)
+    private val activeInferenceRequestId = AtomicLong(0L)
     // Read/written only by main-thread overlay commits.
     private var lastAppliedCaptureSequence = 0L
-    // Main thread only: when the window first became (almost) entirely covered in the current streak.
-    private var fullCoverSinceMs = 0L
+    // Main-thread-only watchdog state. Timers are independent of inference and screenshot workers.
+    private var highCoverageSinceMs = 0L
+    private var lastAppliedCoverageFraction = 0.0
+    private var protectionSessionStartedAtMs = 0L
+    private var screenshotTimeoutRunnable: Runnable? = null
+    private var inferenceTimeoutRunnable: Runnable? = null
+    private var sessionTimeoutRunnable: Runnable? = null
+    private val coverageWatchdog = Runnable {
+        val threshold = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogThresholdOverride
+            ?: CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD else CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD
+        val dwellMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogDwellMsOverride
+            ?: CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS else CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS
+        if (!destroyed && monitoringRequested && lastAppliedCoverageFraction >= threshold) {
+            val elapsed = SystemClock.elapsedRealtime() - highCoverageSinceMs
+            if (highCoverageSinceMs > 0L && elapsed >= dwellMs) {
+                stopForSafety(
+                    "Protection automatically stopped because body redaction stayed above the safety coverage threshold for 3 seconds. The screen is visible.",
+                    "Coverage watchdog: ${"%.2f".format(java.util.Locale.US, lastAppliedCoverageFraction)} sustained for ${elapsed}ms"
+                )
+            } else if (highCoverageSinceMs > 0L) {
+                mainHandler.postDelayed(this.coverageWatchdog, (dwellMs - elapsed).coerceAtLeast(1L))
+            }
+        }
+    }
     private var lastLoggedOverlaySummary = ""
     private var lastLoggedCaptureNote = ""
 
@@ -93,6 +117,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
     // Engine and Conversation APIs are confined to inferenceExecutor.
     private var detector: ScreenContentDetector? = null
+    private var humanBodySegmenter: HumanBodySegmenter? = null
+    @Volatile private var inferenceWorkerPoisoned = false
+    @Volatile private var screenshotWorkerPoisoned = false
     // WindowManager operations are performed on the main thread. Bitmap preparation is worker-safe.
     private var overlay: OverlayController? = null
     private val preferences by lazy { AppPreferences(this) }
@@ -125,6 +152,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         connected = true
         destroyed = false
+        // A timeout shuts down its executor permanently. Process-level poison remains set across
+        // Accessibility unbind/rebind because an interrupted JNI/native call may still be alive.
+        // Only a full Android process restart can guarantee that such a thread is gone.
         currentInstance = this
         TemporaryFrameFiles.removeAbandoned(this)
         DiagnosticLog.record(this, "SERVICE connected sdk=${Build.VERSION.SDK_INT}")
@@ -245,6 +275,23 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
         if (!connected || destroyed) return
+        // Start is idempotent while a session is active. A repeated tap or duplicate intent must
+        // never re-arm and extend the five-minute maximum session deadline.
+        if (monitoringRequested) return
+        if (!ProtectionNotifier.canShowStopNotification(this)) {
+            stopForSafety(
+                "Protection was not started because the emergency Stop notification is unavailable. Enable ScreenVeil notifications and try again.",
+                "POST_NOTIFICATIONS permission or the active notification channel is disabled"
+            )
+            return
+        }
+        if (processWorkerPoisoned.get() || inferenceWorkerPoisoned || screenshotWorkerPoisoned) {
+            stopForSafety(
+                "Protection cannot restart because a capture or inference worker exceeded its hard deadline. Force-stop ScreenVeil from Android App Info, then reopen it and re-enable Accessibility before trying again.",
+                "Capture/inference worker is poisoned after timeout; a process restart is required"
+            )
+            return
+        }
         val requestedProfile = preferences.getModelProfile()
         val injectedDetectorFactory = if (BuildConfig.DEBUG) ScreenVeilTestHooks.detectorFactory else null
         if (injectedDetectorFactory == null && !ModelInstaller.hasProfileMarkers(this, requestedProfile)) {
@@ -260,9 +307,17 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         monitoringRequested = true
         preferences.setProtectionEnabled(true)
         consecutiveCaptureFailures.set(0)
-        fullCoverSinceMs = 0L
+        highCoverageSinceMs = 0L
+        lastAppliedCoverageFraction = 0.0
+        armProtectionSessionTimeout()
         ProtectionNotifier.clearPaused(this)
-        ProtectionNotifier.showActive(this)
+        if (!ProtectionNotifier.showActive(this)) {
+            stopForSafety(
+                "Protection was stopped because Android did not accept the emergency Stop notification. The screen is visible.",
+                "NotificationManager.notify failed for the active Stop notification"
+            )
+            return
+        }
         DiagnosticLog.record(this, "START profile=${requestedProfile.name}")
         ProtectionStatus.update(
             ProtectionStatus.State(
@@ -299,7 +354,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         contentChangeBurstPending = false
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
-        fullCoverSinceMs = 0L
+        resetSafetyTimers()
         maskGeneration.incrementAndGet()
         overlay?.clear()
         ProtectionNotifier.clearActive(this)
@@ -318,9 +373,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         try {
             inferenceExecutor.execute {
                 var candidateForCleanup: ScreenContentDetector? = null
+                var segmenterForCleanup: HumanBodySegmenter? = null
                 try {
                     runCatching { detector?.close() }
+                    runCatching { humanBodySegmenter?.close() }
                     detector = null
+                    humanBodySegmenter = null
                     loadedProfile = null
                     val injectedFactory = if (BuildConfig.DEBUG) ScreenVeilTestHooks.detectorFactory else null
                     val verifiedFiles = LinkedHashMap<String, java.io.File>()
@@ -343,13 +401,25 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
                     candidateForCleanup = created
                     created.initialize(files)
+                    val createdSegmenter: HumanBodySegmenter = if (injectedFactory != null) {
+                        (if (BuildConfig.DEBUG) ScreenVeilTestHooks.bodySegmenterFactory?.invoke(this) else null)
+                            ?: SyntheticHumanBodySegmenter()
+                    } else {
+                        TfliteHumanBodySegmenter()
+                    }
+                    segmenterForCleanup = createdSegmenter
+                    createdSegmenter.initialize(this@ScreenProtectionAccessibilityService, files)
                     if (destroyed) {
                         created.close()
+                        createdSegmenter.close()
                         candidateForCleanup = null
+                        segmenterForCleanup = null
                         return@execute
                     }
                     detector = created
+                    humanBodySegmenter = createdSegmenter
                     candidateForCleanup = null
+                    segmenterForCleanup = null
                     loadedProfile = profile
                     consecutiveModelFailures = 0
                     modelReady = true
@@ -360,7 +430,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                                 ProtectionStatus.State(
                                     active = true,
                                     modelReady = true,
-                                    message = "Protection active · ${profile.title} · ${created.activeBackend}"
+                                    message = "Protection active · ${profile.title} · ${created.activeBackend} · body-mask redaction"
                                 )
                             )
                             beginMonitoring()
@@ -368,8 +438,11 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
                 } catch (error: Throwable) {
                     runCatching { candidateForCleanup?.close() }
+                    runCatching { segmenterForCleanup?.close() }
                     runCatching { detector?.close() }
+                    runCatching { humanBodySegmenter?.close() }
                     detector = null
+                    humanBodySegmenter = null
                     loadedProfile = null
                     modelReady = false
                     modelInitializationStarted.set(false)
@@ -384,6 +457,122 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         } catch (_: RejectedExecutionException) {
             modelInitializationStarted.set(false)
             stopForSafety("Protection paused because the ${profile.title} worker could not start. The screen is visible.", "Inference worker rejected model initialization")
+        }
+    }
+
+    private fun armProtectionSessionTimeout() {
+        mainHandler.removeCallbacks(sessionTimeoutRunnable ?: Runnable {})
+        val startedAt = SystemClock.elapsedRealtime()
+        protectionSessionStartedAtMs = startedAt
+        val timeout = Runnable {
+            if (monitoringRequested && !destroyed && protectionSessionStartedAtMs == startedAt) {
+                stopForSafety(
+                    "The 5-minute test protection session has expired. Protection is OFF and the redaction overlay has been removed.",
+                    "Maximum protection session ${CoveragePolicy.MAX_PROTECTION_SESSION_MS}ms reached"
+                )
+            }
+        }
+        sessionTimeoutRunnable = timeout
+        val durationMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.sessionTimeoutMsOverride
+            ?: CoveragePolicy.MAX_PROTECTION_SESSION_MS else CoveragePolicy.MAX_PROTECTION_SESSION_MS
+        mainHandler.postDelayed(timeout, durationMs)
+        DiagnosticLog.record(this, "SESSION_WATCHDOG armed maxMs=$durationMs")
+    }
+
+    private fun updateCoverageWatchdog(coverage: Double) {
+        lastAppliedCoverageFraction = coverage
+        val threshold = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogThresholdOverride
+            ?: CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD else CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD
+        val dwellMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogDwellMsOverride
+            ?: CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS else CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS
+        if (coverage >= threshold) {
+            if (highCoverageSinceMs == 0L) highCoverageSinceMs = SystemClock.elapsedRealtime()
+            if (!mainHandler.hasCallbacks(coverageWatchdog)) {
+                val elapsed = SystemClock.elapsedRealtime() - highCoverageSinceMs
+                val remaining = (dwellMs - elapsed).coerceAtLeast(1L)
+                mainHandler.postDelayed(coverageWatchdog, remaining)
+                DiagnosticLog.record(this, "COVERAGE_WATCHDOG armed coverage=${"%.2f".format(java.util.Locale.US, coverage)} dwellMs=${remaining}")
+            }
+        } else {
+            highCoverageSinceMs = 0L
+            mainHandler.removeCallbacks(coverageWatchdog)
+        }
+    }
+
+    private fun resetSafetyTimers() {
+        mainHandler.removeCallbacks(coverageWatchdog)
+        sessionTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        sessionTimeoutRunnable = null
+        screenshotTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        screenshotTimeoutRunnable = null
+        inferenceTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        inferenceTimeoutRunnable = null
+        activeScreenshotRequestId.set(0L)
+        activeInferenceRequestId.set(0L)
+        screenshotInFlight.set(false)
+        highCoverageSinceMs = 0L
+        lastAppliedCoverageFraction = 0.0
+        protectionSessionStartedAtMs = 0L
+    }
+
+    private fun armScreenshotWatchdog(requestId: Long, generation: Long) {
+        val timeout = Runnable {
+            // A window/scroll event may advance maskGeneration while the capture worker is still
+            // blocked. That invalidates its pixels, not its liveness deadline. A still-active
+            // request must time out regardless of the current screen generation.
+            if (activeScreenshotRequestId.compareAndSet(requestId, 0L) &&
+                screenshotInFlight.compareAndSet(true, false) && monitoringRequested && !destroyed
+            ) {
+                captureRequestedAfterScreenshot.set(false)
+                screenshotWorkerPoisoned = true
+                processWorkerPoisoned.set(true)
+                screenshotExecutor.shutdownNow()
+                stopForSafety(
+                    "Protection paused because Android did not complete the screenshot request within 5 seconds. The screen is visible.",
+                    "Screenshot watchdog expired requestId=$requestId requestGeneration=$generation currentGeneration=${maskGeneration.get()}; app process restart required before retry"
+                )
+            }
+        }
+        screenshotTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        screenshotTimeoutRunnable = timeout
+        val durationMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.screenshotTimeoutMsOverride
+            ?: CoveragePolicy.SCREENSHOT_TIMEOUT_MS else CoveragePolicy.SCREENSHOT_TIMEOUT_MS
+        mainHandler.postDelayed(timeout, durationMs)
+    }
+
+    private fun armInferenceWatchdog(requestId: Long, generation: Long) {
+        val timeout = Runnable {
+            // A screen-change event invalidates the old frame but cannot make a hung JNI/native
+            // inference call healthy. Enforce the deadline by request identity, not mask generation.
+            if (activeInferenceRequestId.compareAndSet(requestId, 0L) && inferenceInFlight.get() &&
+                monitoringRequested && !destroyed
+            ) {
+                // A JNI/native inference call may not respond to interruption. Do not attempt to
+                // reuse this single-thread executor or leave old work eligible to repaint the UI.
+                inferenceWorkerPoisoned = true
+                processWorkerPoisoned.set(true)
+                modelReady = false
+                loadedProfile = null
+                inferenceExecutor.shutdownNow()
+                stopForSafety(
+                    "Protection paused because model inference exceeded its 8-second safety deadline. The screen is visible.",
+                    "Inference watchdog expired requestId=$requestId requestGeneration=$generation currentGeneration=${maskGeneration.get()}; app process restart required before retry"
+                )
+            }
+        }
+        inferenceTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        inferenceTimeoutRunnable = timeout
+        val durationMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.inferenceTimeoutMsOverride
+            ?: CoveragePolicy.INFERENCE_TIMEOUT_MS else CoveragePolicy.INFERENCE_TIMEOUT_MS
+        mainHandler.postDelayed(timeout, durationMs)
+    }
+
+    private fun finishInferenceWatchdog(requestId: Long) {
+        mainHandler.post {
+            if (activeInferenceRequestId.compareAndSet(requestId, 0L)) {
+                inferenceTimeoutRunnable?.let(mainHandler::removeCallbacks)
+                inferenceTimeoutRunnable = null
+            }
         }
     }
 
@@ -489,12 +678,15 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return
         }
 
+        val screenshotId = screenshotRequestSequence.incrementAndGet()
+        activeScreenshotRequestId.set(screenshotId)
+        armScreenshotWatchdog(screenshotId, captureGeneration)
         val requestSequence = captureSequence.incrementAndGet()
         val scan = try {
             findScreenshotTarget()
         } catch (error: Throwable) {
             lastScreenshotTarget = "window enumeration failed: ${error.message ?: error.javaClass.simpleName}"
-            finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
+            finishScreenshotRequest(screenshotId, SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration != maskGeneration.get() || destroyed) return
             handleCaptureFailure(
                 "Could not identify the active application window · retrying without blocking the screen",
@@ -506,7 +698,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         if (scan.systemPanelOpen) {
             lastScreenshotTarget = "system panel is active; masks paused"
             noteCapture("SYSTEM_PANEL masks cleared")
-            finishScreenshotRequest()
+            finishScreenshotRequest(screenshotId)
             if (activeRedactions.isNotEmpty()) clearMasks()
             return
         }
@@ -514,7 +706,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         if (target == null) {
             lastScreenshotTarget = "no active application window; foregroundPackage=$currentForegroundPackage"
             noteCapture("NO_ACTIVE_APP_WINDOW")
-            finishScreenshotRequest()
+            finishScreenshotRequest(screenshotId)
             // Nothing to protect and nothing to anchor a mask to: never leave a stale overlay up.
             if (activeRedactions.isNotEmpty()) clearMasks()
             ProtectionStatus.update(
@@ -539,7 +731,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                         val frame = injectedFrameProvider(Rect(target.screenBounds))
                         mainHandler.post {
                             try {
-                                if (monitoringRequested && !destroyed && captureGeneration == maskGeneration.get()) {
+                                if (activeScreenshotRequestId.get() == screenshotId && monitoringRequested && !destroyed && captureGeneration == maskGeneration.get()) {
                                     consecutiveCaptureFailures.set(0)
                                     screenshotSuccesses.incrementAndGet()
                                     dispatchFrame(frame, target.screenBounds, captureGeneration, requestSequence, now)
@@ -547,12 +739,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                                     frame.recycle()
                                 }
                             } finally {
-                                finishScreenshotRequest()
+                                finishScreenshotRequest(screenshotId)
                             }
                         }
                     } catch (error: Throwable) {
                         mainHandler.post {
-                            finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
+                            finishScreenshotRequest(screenshotId, SCREENSHOT_RATE_LIMIT_RETRY_MS)
                             if (captureGeneration == maskGeneration.get() && !destroyed) {
                                 screenshotFailures.incrementAndGet()
                                 lastScreenshotFailure = "injected frame-provider failure: ${error.message ?: error.javaClass.simpleName}"
@@ -566,7 +758,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
                 }
             } catch (_: RejectedExecutionException) {
-                finishScreenshotRequest()
+                finishScreenshotRequest(screenshotId)
                 handleCaptureFailure("Screenshot worker is unavailable", "Screenshot executor rejected capture", captureGeneration)
             }
             return
@@ -579,7 +771,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
                         val buffer: HardwareBuffer = screenshot.hardwareBuffer
                         try {
-                            if (!monitoringRequested || destroyed || captureGeneration != maskGeneration.get()) return
+                            if (activeScreenshotRequestId.get() != screenshotId || !monitoringRequested || destroyed || captureGeneration != maskGeneration.get()) return
                             val hardwareBitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
                                 ?: error("Android could not wrap the application-window screenshot")
                             val frame = try {
@@ -604,14 +796,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             try {
                                 buffer.close()
                             } finally {
-                                finishScreenshotRequest()
+                                finishScreenshotRequest(screenshotId)
                             }
                         }
                     }
 
                     override fun onFailure(errorCode: Int) {
-                        if (captureGeneration != maskGeneration.get() || destroyed) {
-                            finishScreenshotRequest()
+                        if (activeScreenshotRequestId.get() != screenshotId || captureGeneration != maskGeneration.get() || destroyed) {
+                            finishScreenshotRequest(screenshotId)
                             return
                         }
                         screenshotFailures.incrementAndGet()
@@ -630,14 +822,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             // in-flight latch; otherwise a pending event could launch another
                             // screenshot in the interval before the safety stop reaches main.
                             captureRequestedAfterScreenshot.set(false)
-                            finishScreenshotRequest()
+                            finishScreenshotRequest(screenshotId)
                             stopForSafety(
                                 "Protection paused because this app protects its window with FLAG_SECURE. The screen is visible.",
                                 detail
                             )
                             return
                         }
-                        finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
+                        finishScreenshotRequest(screenshotId, SCREENSHOT_RATE_LIMIT_RETRY_MS)
                         if (errorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
                             // Android's rate-limit response does not indicate a changed frame;
                             // keep the last validated overlay and retry after the API's cooldown.
@@ -659,7 +851,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         } catch (error: Throwable) {
             screenshotFailures.incrementAndGet()
             lastScreenshotFailure = "request threw ${error.javaClass.simpleName}: ${error.message ?: "no message"}"
-            finishScreenshotRequest(SCREENSHOT_RATE_LIMIT_RETRY_MS)
+            finishScreenshotRequest(screenshotId, SCREENSHOT_RATE_LIMIT_RETRY_MS)
             if (captureGeneration == maskGeneration.get() && !destroyed) {
                 handleCaptureFailure(
                     "Android screenshot request failed · retrying without blocking the screen",
@@ -670,7 +862,15 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun finishScreenshotRequest(retryDelayMs: Long? = null) {
+    private fun finishScreenshotRequest(requestId: Long, retryDelayMs: Long? = null) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { finishScreenshotRequest(requestId, retryDelayMs) }
+            return
+        }
+        // A late callback after the screenshot watchdog must not release or reschedule a newer request.
+        if (!activeScreenshotRequestId.compareAndSet(requestId, 0L)) return
+        screenshotTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        screenshotTimeoutRunnable = null
         screenshotInFlight.set(false)
         val shouldRetry = captureRequestedAfterScreenshot.getAndSet(false)
         if ((shouldRetry || retryDelayMs != null) && monitoringRequested && !destroyed) {
@@ -705,12 +905,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         // At most one extra capture is requested while inference is busy. This is not a frame
         // queue: repeated events cannot build unbounded work or retain screenshots in memory.
         captureRequestedWhileBusy.set(true)
-        val existing = activeRedactions
-        if (existing.isNotEmpty() && redactionInFlight.compareAndSet(false, true)) {
-            submitRedactionRefresh(frame, existing, settings, captureGeneration, requestSequence, screenBounds, captureRequestedAtMs)
-        } else if (!frame.isRecycled) {
-            frame.recycle()
-        }
+        // Do not reuse old segmentation masks against a new screenshot. That could redraw stale
+        // body pixels in changed coordinates. Drop this frame and let the one pending capture run
+        // after the current inference finishes.
+        if (!frame.isRecycled) frame.recycle()
     }
 
     private fun submitInference(
@@ -721,16 +919,27 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         requestSequence: Long,
         captureRequestedAtMs: Long
     ) {
+        val inferenceId = inferenceRequestSequence.incrementAndGet()
+        activeInferenceRequestId.set(inferenceId)
+        mainHandler.post {
+            if (activeInferenceRequestId.get() == inferenceId && monitoringRequested && !destroyed) {
+                armInferenceWatchdog(inferenceId, captureGeneration)
+            }
+        }
         try {
             inferenceExecutor.execute {
                 try {
-                    if (destroyed || !monitoringRequested || captureGeneration != maskGeneration.get()) return@execute
+                    if (activeInferenceRequestId.get() != inferenceId || destroyed || !monitoringRequested || captureGeneration != maskGeneration.get()) return@execute
                     val currentDetector = detector ?: error("Selected model profile is not available")
                     val started = SystemClock.elapsedRealtime()
                     val result = currentDetector.inspect(frame)
-                    val elapsed = SystemClock.elapsedRealtime() - started
                     if (destroyed || !monitoringRequested || captureGeneration != maskGeneration.get()) return@execute
 
+                    if (result.safetyViolation) {
+                        throw CoveragePolicy.CoverageLimitExceededException(
+                            result.diagnostic ?: "Detector output exceeded a hard safety bound"
+                        )
+                    }
                     if (!result.parseSucceeded) {
                         recordModelFailure(
                             "${activeProfileName} returned an invalid result · retrying without blocking the screen",
@@ -746,13 +955,22 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                             ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain, settings.redactAllPeople)
                         }
                     )
-                    val redactions = limited.kept
-                    if (limited.dropped > 0) {
-                        DiagnosticLog.record(
-                            this@ScreenProtectionAccessibilityService,
-                            "COVERAGE_LIMIT dropped=${limited.dropped} unconfirmed region(s) that would blanket the window"
-                        )
+                    val detectorRegions = limited.kept
+                    val redactions = if (detectorRegions.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val segmenter = humanBodySegmenter
+                            ?: throw CoveragePolicy.BodySegmentationSafetyException("Verified body segmentation model is unavailable")
+                        val bodyMask = try {
+                            segmenter.segment(frame)
+                        } catch (error: Throwable) {
+                            throw CoveragePolicy.BodySegmentationSafetyException(
+                                "Body segmentation failed; rectangular fallback is prohibited", error
+                            )
+                        }
+                        detectorRegions.map { it.copy(bodyMask = bodyMask) }
                     }
+                    val elapsed = SystemClock.elapsedRealtime() - started
                     val prepared = overlay?.prepare(frame, redactions, settings, screenBounds)
                     postPreparedMasks(
                         captureGeneration,
@@ -766,14 +984,29 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     )
                 } catch (error: Throwable) {
                     if (!destroyed && monitoringRequested && captureGeneration == maskGeneration.get()) {
-                        recordModelFailure(
-                            "${activeProfileName} inference failed · retrying without blocking the screen",
-                            error.message ?: error.javaClass.simpleName,
-                            captureGeneration
-                        )
+                        when (error) {
+                            is CoveragePolicy.CoverageLimitExceededException -> mainHandler.post {
+                                stopForSafety(
+                                    "Protection paused because the redaction output exceeded the maximum safe coverage. The screen is visible.",
+                                    error.message
+                                )
+                            }
+                            is CoveragePolicy.BodySegmentationSafetyException -> mainHandler.post {
+                                stopForSafety(
+                                    "Protection paused because body segmentation could not produce a safe pixel mask. Rectangular fallback is disabled; the screen is visible.",
+                                    error.message
+                                )
+                            }
+                            else -> recordModelFailure(
+                                "${activeProfileName} inference failed · retrying without blocking the screen",
+                                error.message ?: error.javaClass.simpleName,
+                                captureGeneration
+                            )
+                        }
                     }
                 } finally {
                     if (!frame.isRecycled) frame.recycle()
+                    finishInferenceWatchdog(inferenceId)
                     inferenceInFlight.set(false)
                     if (captureRequestedWhileBusy.getAndSet(false) && !destroyed && monitoringRequested) {
                         mainHandler.post {
@@ -784,52 +1017,9 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             }
         } catch (_: RejectedExecutionException) {
             if (!frame.isRecycled) frame.recycle()
+            finishInferenceWatchdog(inferenceId)
             inferenceInFlight.set(false)
             captureRequestedWhileBusy.set(false)
-        }
-    }
-
-    private fun submitRedactionRefresh(
-        frame: Bitmap,
-        regions: List<DetectedMediaRegion>,
-        settings: dev.screenveil.app.policy.ModerationSettings,
-        generation: Long,
-        requestSequence: Long,
-        screenBounds: Rect,
-        captureRequestedAtMs: Long
-    ) {
-        try {
-            redactionExecutor.execute {
-                try {
-                    if (!destroyed && monitoringRequested && generation == maskGeneration.get()) {
-                        val prepared = overlay?.prepare(frame, regions, settings, screenBounds)
-                        postPreparedMasks(
-                            generation,
-                            requestSequence,
-                            prepared,
-                            activeMediaRegionCount,
-                            regions.size,
-                            lastInferenceMs,
-                            replacementRedactions = null,
-                            captureRequestedAtMs = captureRequestedAtMs
-                        )
-                    }
-                } catch (error: Throwable) {
-                    if (!destroyed && monitoringRequested && generation == maskGeneration.get()) {
-                        handleCaptureFailure(
-                            "Redaction refresh failed · retrying without blocking the screen",
-                            error.message ?: error.javaClass.simpleName,
-                            generation
-                        )
-                    }
-                } finally {
-                    if (!frame.isRecycled) frame.recycle()
-                    redactionInFlight.set(false)
-                }
-            }
-        } catch (_: RejectedExecutionException) {
-            if (!frame.isRecycled) frame.recycle()
-            redactionInFlight.set(false)
         }
     }
 
@@ -864,20 +1054,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     return@post
                 }
                 val coverage = prepared?.coverageFraction ?: 0.0
-                if (coverage >= CoveragePolicy.FULL_COVER_FRACTION) {
-                    val now = SystemClock.elapsedRealtime()
-                    if (fullCoverSinceMs == 0L) {
-                        fullCoverSinceMs = now
-                    } else if (now - fullCoverSinceMs >= FULL_COVER_MAX_DWELL_MS) {
-                        stopForSafety(
-                            "Protection paused because the whole screen stayed covered for ${FULL_COVER_MAX_DWELL_MS / 1000} seconds. This looks like a detection error. The screen is visible.",
-                            "Full-window coverage ${"%.2f".format(java.util.Locale.US, coverage)} sustained"
-                        )
-                        return@post
-                    }
-                } else {
-                    fullCoverSinceMs = 0L
-                }
+                updateCoverageWatchdog(coverage)
                 val overlaySummary = "OVERLAY detected=$detectedCount redacted=${prepared?.redactedRegions ?: 0} " +
                     "coverage=${"%.2f".format(java.util.Locale.US, coverage)} profile=$activeProfileName"
                 if (overlaySummary != lastLoggedOverlaySummary) {
@@ -993,7 +1170,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
         consecutiveCaptureFailures.set(0)
-        fullCoverSinceMs = 0L
+        resetSafetyTimers()
         maskGeneration.incrementAndGet()
         overlay?.clear()
         ProtectionNotifier.clearActive(this)
@@ -1020,6 +1197,13 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private fun clearMasks() {
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
+        // Reset the dwell clock immediately on the main thread; do not leave a queued watchdog
+        // eligible to stop protection after masks were already cleared for a window/scroll change.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            updateCoverageWatchdog(0.0)
+        } else {
+            mainHandler.post { updateCoverageWatchdog(0.0) }
+        }
         val generation = maskGeneration.incrementAndGet()
         mainHandler.post {
             if (!destroyed && generation == maskGeneration.get()) {
@@ -1054,7 +1238,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         destroyed = true
         connected = false
         monitoringRequested = false
-        fullCoverSinceMs = 0L
+        resetSafetyTimers()
         ProtectionNotifier.clearActive(this)
         if (wasProtecting) ProtectionNotifier.showPaused(this, "$message - the screen is no longer protected.")
         DiagnosticLog.record(this, "SHUTDOWN $message wasProtecting=$wasProtecting")
@@ -1077,13 +1261,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         runCatching {
             inferenceExecutor.execute {
                 runCatching { detector?.close() }
+                runCatching { humanBodySegmenter?.close() }
                 detector = null
+                humanBodySegmenter = null
                 loadedProfile = null
             }
         }
         inferenceExecutor.shutdown()
         screenshotExecutor.shutdown()
-        redactionExecutor.shutdown()
         ProtectionStatus.update(ProtectionStatus.State(active = false, message = message))
     }
 
@@ -1097,10 +1282,18 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         private const val RETRY_AFTER_ANALYSIS_FAILURE_MS = 900L
         private const val MAX_CONSECUTIVE_MODEL_FAILURES = 3
         private const val MAX_CONSECUTIVE_CAPTURE_FAILURES = 5
-        // Sustained near-total coverage is far more likely a detection error than real content.
-        private const val FULL_COVER_MAX_DWELL_MS = 30_000L
-
         @Volatile private var currentInstance: ScreenProtectionAccessibilityService? = null
+        // A stuck JNI/native call may ignore interruption. Keep this latch across service
+        // recreation so repeatedly toggling Accessibility cannot create unbounded worker threads.
+        private val processWorkerPoisoned = AtomicBoolean(false)
+
+        /** Debug-only reset between isolated instrumentation cases; production clears on process death. */
+        internal fun resetWorkerPoisonForTest() {
+            if (BuildConfig.DEBUG) processWorkerPoisoned.set(false)
+        }
+
+        internal fun isWorkerPoisonedForTest(): Boolean =
+            BuildConfig.DEBUG && processWorkerPoisoned.get()
 
         fun requestStart(): Boolean {
             val service = currentInstance ?: return false
@@ -1156,7 +1349,6 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             currentInstance?.let { service ->
                 !service.screenshotInFlight.get() &&
                     !service.inferenceInFlight.get() &&
-                    !service.redactionInFlight.get() &&
                     !service.captureRequestedAfterScreenshot.get() &&
                     !service.captureRequestedWhileBusy.get() &&
                     !service.contentChangeBurstPending &&
@@ -1182,6 +1374,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 "failures=${service.screenshotFailures.get()}, lastFailure=${service.lastScreenshotFailure}, " +
                 "captureFailures=${service.consecutiveCaptureFailures.get()}, " +
                 "screenshotInFlight=${service.screenshotInFlight.get()}, " +
+                "inferenceInFlight=${service.inferenceInFlight.get()}, " +
+                "inferenceWorkerPoisoned=${service.inferenceWorkerPoisoned}, " +
+                "screenshotWorkerPoisoned=${service.screenshotWorkerPoisoned}, " +
+                "processWorkerPoisoned=${processWorkerPoisoned.get()}, " +
+                "coverage=${"%.3f".format(java.util.Locale.US, service.lastAppliedCoverageFraction)}, " +
+                "sessionElapsedMs=${if (service.protectionSessionStartedAtMs > 0L) SystemClock.elapsedRealtime() - service.protectionSessionStartedAtMs else 0L}, " +
                 "maskGeneration=${service.maskGeneration.get()}"
         }
 

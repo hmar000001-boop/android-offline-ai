@@ -3,7 +3,7 @@ package dev.screenveil.app.policy
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.NormalizedBox
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class CoveragePolicyTest {
@@ -29,36 +29,50 @@ class CoveragePolicyTest {
         assertEquals(0.0, CoveragePolicy.unionFraction(listOf(NormalizedBox(500, 0, 500, 1000))), 1e-9)
     }
 
-    @Test fun fullScreenUncertainRegionIsDropped() {
-        val limited = CoveragePolicy.limit(listOf(region(full, ContentDecision.UNCERTAIN)))
-        assertTrue(limited.kept.isEmpty())
-        assertEquals(1, limited.dropped)
+    @Test fun decisionCategoryNeverExemptsARegionFromThePixelCoverageGate() {
+        listOf(ContentDecision.UNCERTAIN, ContentDecision.SUGGESTIVE, ContentDecision.EXPLICIT, ContentDecision.SWIMWEAR)
+            .forEach { decision ->
+                // Detector boxes are retained for segmentation; actual pixel area is enforced later.
+                assertEquals(1, CoveragePolicy.limit(listOf(region(full, decision))).kept.size)
+                assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+                    CoveragePolicy.requireRegionCoverage(0.36)
+                }
+            }
     }
 
-    @Test fun fullScreenConfirmedExplicitRegionIsKept() {
-        val limited = CoveragePolicy.limit(listOf(region(full, ContentDecision.EXPLICIT)))
-        assertEquals(1, limited.kept.size)
-        assertEquals(0, limited.dropped)
-    }
-
-    @Test fun smallUncertainRegionIsKept() {
-        val limited = CoveragePolicy.limit(listOf(region(NormalizedBox(100, 100, 400, 500), ContentDecision.UNCERTAIN)))
-        assertEquals(1, limited.kept.size)
-    }
-
-    @Test fun manyUncertainRegionsThatTogetherBlanketTheWindowAreTrimmed() {
-        val strips = (0 until 5).map { index ->
-            region(NormalizedBox(0, index * 200, 1000, index * 200 + 200), ContentDecision.PERSON_LOW_RISK)
+    @Test fun oneRegionCanCoverAtMostThirtyFivePercent() {
+        CoveragePolicy.requireRegionCoverage(0.35)
+        assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.requireRegionCoverage(0.350001)
         }
-        val limited = CoveragePolicy.limit(strips)
-        assertTrue(CoveragePolicy.unionFraction(limited.kept.map { it.box }) < CoveragePolicy.FULL_COVER_FRACTION)
-        assertTrue(limited.dropped >= 1)
     }
 
-    @Test fun confirmedRegionsAreNeverTrimmedEvenWhenTheyBlanketTheWindow() {
-        val strips = (0 until 5).map { index ->
-            region(NormalizedBox(0, index * 200, 1000, index * 200 + 200), ContentDecision.SWIMWEAR)
+    @Test fun combinedMasksCanCoverAtMostFortyFivePercent() {
+        CoveragePolicy.requireTotalCoverage(0.45)
+        assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.requireTotalCoverage(0.450001)
         }
-        assertEquals(5, CoveragePolicy.limit(strips).kept.size)
+    }
+
+    @Test fun nonFiniteCoverageIsRejected() {
+        assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.requireTotalCoverage(Double.NaN)
+        }
+        assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.requireRegionCoverage(Double.POSITIVE_INFINITY)
+        }
+    }
+
+    @Test fun moreThanTwentyFourRegionsStopsInsteadOfSilentlyDroppingRegions() {
+        val regions = (0..CoveragePolicy.MAX_REGIONS_PER_FRAME).map {
+            region(NormalizedBox(10, 10, 20, 20), ContentDecision.EXPLICIT)
+        }
+        assertThrows(CoveragePolicy.CoverageLimitExceededException::class.java) {
+            CoveragePolicy.limit(regions)
+        }
+    }
+
+    @Test fun fiveMinuteTestSessionIsTheConfiguredMaximum() {
+        assertEquals(300_000L, CoveragePolicy.MAX_PROTECTION_SESSION_MS)
     }
 }

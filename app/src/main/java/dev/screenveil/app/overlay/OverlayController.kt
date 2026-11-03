@@ -17,6 +17,7 @@ import android.widget.ImageView
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.policy.ModerationPolicy
 import dev.screenveil.app.policy.ModerationSettings
+import dev.screenveil.app.policy.CoveragePolicy
 
 /**
  * Produces one fully composed bitmap on a worker, then swaps that bitmap into one accessibility
@@ -58,32 +59,35 @@ open class OverlayController(
             ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain, settings.redactAllPeople)
         }
         if (selected.isEmpty()) return null
+        if (selected.size > CoveragePolicy.MAX_REGIONS_PER_FRAME) {
+            throw CoveragePolicy.CoverageLimitExceededException("Too many redaction regions: ${selected.size}")
+        }
 
         val composed = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         composed.eraseColor(Color.TRANSPARENT)
         val canvas = Canvas(composed)
         val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
-        val coverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = OPAQUE_FALLBACK }
         var completed = 0
-        val coveredBoxes = ArrayList<dev.screenveil.app.model.NormalizedBox>()
 
         try {
-            for (region in selected) {
+            for ((index, region) in selected.withIndex()) {
+                val bodyMask = region.bodyMask ?: throw CoveragePolicy.BodySegmentationSafetyException(
+                    "Region ${index + 1} has no verified body/clothing segmentation mask; refusing rectangular redaction"
+                )
                 val mapped = MaskGeometry.map(
                     region.box,
                     frame.width,
                     frame.height,
                     width,
                     height
+                ) ?: throw CoveragePolicy.BodySegmentationSafetyException(
+                    "Region ${index + 1} has invalid geometry; refusing to draw an approximate or full-window mask"
                 )
-                if (mapped == null) {
-                    // Reject this region only. Bad model coordinates must never turn into a
-                    // full-window obstruction; the geometry diagnostic is handled by the caller.
-                    continue
-                }
                 val source = mapped.source
                 val target = mapped.destination
                 var crop: Bitmap? = null
+                var redacted: Bitmap? = null
+                var rasterizedRegion: Bitmap? = null
                 try {
                     crop = Bitmap.createBitmap(
                         frame,
@@ -92,49 +96,70 @@ open class OverlayController(
                         source.width,
                         source.height
                     )
-                    val redacted = BitmapRedactor.redact(crop, settings.effect, settings.intensity)
-                    try {
-                        canvas.drawBitmap(
-                            redacted,
-                            null,
-                            RectF(
-                                target.left.toFloat(),
-                                target.top.toFloat(),
-                                target.right.toFloat(),
-                                target.bottom.toFloat()
-                            ),
-                            imagePaint
-                        )
-                    } finally {
-                        if (!redacted.isRecycled) redacted.recycle()
+                    redacted = BitmapRedactor.redactMasked(
+                        source = crop,
+                        effect = settings.effect,
+                        intensity = settings.intensity,
+                        bodyMask = bodyMask,
+                        sourceRect = Rect(source.left, source.top, source.right, source.bottom),
+                        frameWidth = frame.width,
+                        frameHeight = frame.height
+                    )
+                    // Rasterize at the exact destination dimensions before enforcing the per-region
+                    // limit. This measures the alpha pixels that will actually be drawn rather
+                    // than estimating screen area from source-box proportions.
+                    rasterizedRegion = if (redacted.width == target.width() && redacted.height == target.height()) {
+                        redacted
+                    } else {
+                        Bitmap.createScaledBitmap(redacted, target.width(), target.height(), true)
                     }
-                } catch (_: Throwable) {
-                    // Fail closed for an individual region if crop allocation, blur/pixelation or
-                    // drawing fails: cover it rather than silently leaving the source visible.
-                    canvas.drawRect(
-                        target.left.toFloat(),
-                        target.top.toFloat(),
-                        target.right.toFloat(),
-                        target.bottom.toFloat(),
-                        coverPaint
+                    val regionCoverage = BitmapRedactor.countVisiblePixels(rasterizedRegion).toDouble() /
+                        (width.toDouble() * height.toDouble())
+                    CoveragePolicy.requireRegionCoverage(regionCoverage)
+                    canvas.drawBitmap(
+                        rasterizedRegion,
+                        null,
+                        RectF(
+                            target.left.toFloat(),
+                            target.top.toFloat(),
+                            target.right.toFloat(),
+                            target.bottom.toFloat()
+                        ),
+                        imagePaint
+                    )
+                } catch (error: Throwable) {
+                    if (error is CoveragePolicy.CoverageLimitExceededException ||
+                        error is CoveragePolicy.BodySegmentationSafetyException
+                    ) throw error
+                    throw CoveragePolicy.BodySegmentationSafetyException(
+                        "Could not safely render body/clothing mask for region ${index + 1}", error
                     )
                 } finally {
+                    rasterizedRegion?.let {
+                        if (it !== redacted && !it.isRecycled) it.recycle()
+                    }
+                    redacted?.let { if (!it.isRecycled) it.recycle() }
                     crop?.let { if (!it.isRecycled) it.recycle() }
                 }
                 completed++
-                coveredBoxes += region.box
             }
 
-            if (completed == 0) {
-                // No valid local region remains. Do not manufacture a full-window mask.
-                if (!composed.isRecycled) composed.recycle()
-                return null
+            if (completed != selected.size) {
+                throw CoveragePolicy.BodySegmentationSafetyException(
+                    "Only $completed of ${selected.size} requested body masks were rendered"
+                )
+            }
+            val visiblePixels = BitmapRedactor.countVisiblePixels(composed)
+            val coverage = visiblePixels.toDouble() / (width.toDouble() * height.toDouble())
+            CoveragePolicy.requireTotalCoverage(coverage)
+            if (visiblePixels == 0) {
+                throw CoveragePolicy.BodySegmentationSafetyException("Segmentation generated no visible body/clothing pixels")
             }
             return PreparedOverlay(
                 composed,
                 Rect(screenBounds),
                 completed,
-                dev.screenveil.app.policy.CoveragePolicy.unionFraction(coveredBoxes)
+                coverage
             )
         } catch (error: Throwable) {
             if (!composed.isRecycled) composed.recycle()
@@ -242,6 +267,5 @@ open class OverlayController(
 
     companion object {
         private const val BITMAP_RETIRE_DELAY_MS = 200L
-        private val OPAQUE_FALLBACK = Color.rgb(18, 22, 30)
     }
 }

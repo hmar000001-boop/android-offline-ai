@@ -33,6 +33,15 @@ An older Android conversion example for the OIDv4 SSD model documents the interm
 
 A positive `Swimwear` box should be associated with an overlapping `Person` box where possible. For the user's policy, redact the full associated person region; if no person match exists, redact the detected garment box. A missing `Swimwear` detection must not automatically become `ALLOW`. The two general NSFW classifiers remain additional evidence and do not themselves provide a swimwear label.
 
+## Wider candidate review (2026-11-03)
+
+The Google OIDv4 SSD candidate remains the preferred production-conversion path under the current source/provenance policy, but it is not the only swimsuit-related model now identified. The review also found:
+
+- **Electblake RT-DETRv2 R18vd:** object-detection labels include `swim` and `swim_sports`; the repository lists an 80.5 MB Safetensors checkpoint, not a direct Android ONNX/TFLite file. The training data is private, the initial boxes are YOLO-World pseudo-labels, and the reported metrics are on a private validation split with no independent benchmark. It is a research export candidate only.
+- **Electblake EfficientNetV2-S classifier:** a direct 81.8 MB FP32 ONNX graph is listed, with MIT declared for the fine-tuned model. Its five labels are `denim_shorts`, `lingerie`, `maid`, `nurse`, and `swim_bikini`; it has no `other` or rejection label, and the publisher says its softmax values are uncalibrated. It is a possible isolated classifier experiment, not evidence that a negative result means safe content.
+
+These findings do not satisfy the admission requirements above. A generic ONNX/TFLite container is not evidence that the app's exact input preprocessing, tensor outputs, score interpretation, object boxes, class taxonomy, and Android performance are correct. ONNX Runtime supports Android Java with CPU/NNAPI/XNNPACK, but the exact exported graph still must run and be measured on the target device. The candidate review and source links are in [`MODEL_CANDIDATE_REVIEW_2026-11-03.md`](MODEL_CANDIDATE_REVIEW_2026-11-03.md).
+
 ## Current status
 
-**Not installed, not selectable and not runtime-integrated.** Balanced and Fast continue using EfficientDet-Lite0. This document describes the admission path, not a completed model conversion.
+**Not installed, not selectable and not runtime-integrated.** Balanced and Fast continue using EfficientDet-Lite0. The `SWIMWEAR_AWARE` profile remains disabled. The Google model remains the preferred production conversion candidate; the two Electblake models are research candidates only. This document describes the admission path, not a completed model conversion.

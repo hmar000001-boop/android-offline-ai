@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # Invoked as one command by reactivecircus/android-emulator-runner.
 # Diagnose test APK runtime packaging before executing the instrumentation suite.
-set -u
+set -euo pipefail
 
 # Remove stale .kt fixture files left by overlaying a new source archive on an
 # older checkout, then fail early if any duplicate fixture declaration remains.
 bash scripts/prepare-instrumentation-sources.sh
+
+# Include the exact pinned segmentation model in the instrumentation APK. This is a real model
+# initialization/inference smoke test, not a substitute for the separate full manual model audit.
+SEGMENTER_TEST_ASSETS="app/src/androidTest/assets/ci-models"
+rm -rf "$SEGMENTER_TEST_ASSETS"
+mkdir -p "$SEGMENTER_TEST_ASSETS"
+if ! python3 scripts/verify-model-pins.py \
+    --download \
+    --only google-selfie-multiclass-256-tflite \
+    --output-dir "$SEGMENTER_TEST_ASSETS"; then
+  echo "Pinned body-segmentation model download/verification failed; emulator tests must not run without it." >&2
+  exit 1
+fi
 
 set +e
 bash scripts/diagnose-instrumentation-runtime.sh 2>&1 | tee instrumentation-runtime-diagnostics.log

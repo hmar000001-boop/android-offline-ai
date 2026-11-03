@@ -22,6 +22,7 @@ The source catalog is implemented in `GemmaModelCatalog.kt` as `SpecializedModel
 | Google EfficientDet-Lite0 float32 | [Fixed Google Storage artifact](https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite) | 13,836,895–20,000,000 bytes | `40338edf5ec70d43e318b0a716a84d4564cd1802759a7a07170c7e43796dbf58` | Apache-2.0 | TensorFlow Lite Task Vision `0.4.4` (standalone local runtime) | Person/object localization; not a content classifier |
 | Yahoo OpenNSFW ResNet-50 ONNX | [gawryco/opennsfw-onnx release `model-v1`](https://github.com/gawryco/opennsfw-onnx/releases/tag/model-v1) | 23,590,724–26,000,000 bytes | `864bb37bf8863564b87eb330ab8c785a79a773f4e7c43cb96db52ed8611305fa` | Original Yahoo weights BSD-2-Clause; ONNX conversion/preprocessing components have separate notices | ONNX Runtime Android `1.31.1` | General binary NSFW score |
 | ViT-Tiny NSFW 384 ONNX | [KanariKanaru repository revision `ab04f01`](https://huggingface.co/KanariKanaru/nsfw-image-detection-384-onnx/tree/ab04f01) | 22,000,000–30,000,000 bytes | `e9350e576608afe4b57a089ffeb0ebafa1389cdcea4882dd61df28c45f1c24d2` | Apache-2.0 as declared by the ONNX repository | ONNX Runtime Android `1.31.1` | Second general NSFW score; tiled fallback when no person box is detected |
+| Google Selfie Multiclass 256×256 TFLite | [Google versioned MediaPipe model artifact](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite) | 16,000,000–17,000,000 bytes | `c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0` | Apache-2.0 as stated on the Google model card | TensorFlow Lite Task Vision `0.4.4` | Pixel classes for body-skin/clothes versus face, hair, accessories and background; not a content classifier |
 | Gemma 4 E2B Instruct LiteRT-LM | [litert-community revision `6e5c4f1e395deb959c494953478fa5cec4b8008f`](https://huggingface.co/litert-community/Gemma-4-E2B-it-litert-lm/tree/6e5c4f1e395deb959c494953478fa5cec4b8008f) | 2,588,147,712–2,700,000,000 bytes | `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c` | Apache-2.0 for Gemma 4; LiteRT-LM community packaging has a separate upstream provenance | LiteRT-LM Android `0.18.0` | Optional general multimodal vision profile |
 
 The `minimumBytes` and `maximumBytes` values are accepted artifact-size windows, not advertised exact sizes. The exact SHA-256 digest is the identity check. A `.verified` marker is a UI/cache hint only; `verifyInstalledBlocking` re-hashes the complete artifact before it is handed to the model runtime.
@@ -30,10 +31,11 @@ The `minimumBytes` and `maximumBytes` values are accepted artifact-size windows,
 
 | Profile | Required model artifacts | Approximate download | Availability |
 |---|---|---:|---|
-| Balanced multi-model (default) | EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW | about 60 MB | Selectable; three artifacts; no Gemma. ViT tile scan runs only if no person boxes are detected. |
-| Fast specialized | EfficientDet-Lite0 + Yahoo OpenNSFW | about 38 MB | Selectable; two artifacts; no Gemma, no second classifier or tile fallback. |
+| Balanced multi-model (default) | EfficientDet-Lite0 + Yahoo OpenNSFW + ViT-Tiny NSFW + Google Selfie Multiclass segmentation | about 76 MB | Selectable; four artifacts; no Gemma. ViT tile scan runs only if no person boxes are detected, and all resulting regions still pass through the body/clothing mask and universal coverage gate. |
+| Fast specialized | EfficientDet-Lite0 + Yahoo OpenNSFW + Google Selfie Multiclass segmentation | about 54 MB | Selectable; three artifacts; no Gemma, ViT or tile fallback. |
 | Swimwear-aware · Google Open Images V4 | Google SSD MobileNet V2 Open Images detector + Yahoo OpenNSFW + ViT-Tiny NSFW (planned) | Not yet pinned | Visible in the profile list but disabled. No candidate model is downloaded, admitted or run before conversion and validation. |
-| Gemma 4 vision | Gemma 4 E2B only | about 2.6 GB | Selectable separate optional profile; it does not install or require specialist models. |
+| Gemma 4 vision | Gemma 4 E2B + Google Selfie Multiclass segmentation | about 2.6 GB + 16–17 MB | Selectable optional multimodal profile; requires segmentation for every redaction. |
+
 
 ## Runtime contracts and interpretation
 
@@ -51,35 +53,53 @@ The model emits `[P(sfw), P(nsfw)]`. The app's 224×224 preprocessing follows th
 
 The app expects RGB float32 NCHW `[1,3,384,384]`, direct 384×384 resize and per-channel normalization `(pixel/255 - 0.5)/0.5`. The model repository documents two logits `[NSFW, safe]`; the app applies softmax and reads index 0. The repository's Apache-2.0 declaration and conversion information are documented, but its accuracy figures are publisher-reported, not an independent ScreenVeil evaluation.
 
+### Google Selfie Multiclass body/clothing segmentation (R6)
+
+Every selected detection region is intersected with one full-screenshot category mask produced by Google's 256×256 Selfie Multiclass model. Its category IDs are `0 background`, `1 hair`, `2 body-skin`, `3 face-skin`, `4 clothes`, and `5 others/accessories`. The current renderer selects only IDs 2 and 4. The rest of each candidate rectangle remains transparent in the overlay. The model is used only for localization; it does not decide whether clothing is swimwear or whether content is sensitive.
+
+The TFLite file is verified against the versioned `float32/1` URL, catalog SHA-256 and 16–17 MB bounds before loading. The runtime adapter uses `ImageSegmenter.createFromFileAndOptions(File, options)` for a downloaded private file, requests a category mask, and checks the mask dimensions/buffer before mapping it back to the screenshot. The input is aspect-preserving letterboxed into 256×256 and the letterbox content bounds are retained for reverse coordinate mapping. The mask is dilated by a small bounded radius to reduce boundary leakage; dilation is clipped to the non-padding content area.
+
+If segmentation fails, returns an invalid/empty result, does not intersect a selected region, or cannot be mapped, protection stops and the overlay is cleared. There is no rectangle fallback. The model card describes a selfie/person segmentation model and its published benchmark is not a Galaxy S24 FE result. Its use on full application screenshots, small/distant people, complex collages and multiple simultaneous persons needs physical-device validation. It is not an anatomical human parser and has no swimwear class.
+
+### R6 universal coverage policy
+
+`CoveragePolicy` no longer exempts `EXPLICIT`, `SUGGESTIVE` or `SWIMWEAR`. The final mask for one region must be ≤35% of the active application window, and the composed union mask must be ≤45%. Both are measured using the actual visible pixel mask, not only the detector rectangle. An output over either bound is rejected and protection stops; it is not cropped to an arbitrary smaller box. A scheduled coverage watchdog stops protection if total coverage remains ≥35% for 3 seconds.
+
+The service also arms an independent 5-minute maximum-session timer, 8-second inference deadline and 5-second screenshot callback deadline. These run from the main looper separately from the inference/screenshot executors. The main looper itself must remain responsive for the application-level stop/clear callback to execute; Android process/service teardown is the system fallback for a completely unresponsive process.
+
 ### Conservative decision policy
 
 The app detects people and evaluates each person crop with the general NSFW classifiers. It does not use a whole-screen NSFW score to redact the entire application window. If the general NSFW score does not cross the explicit threshold, the person crop is `UNCERTAIN`, not `ALLOW`, because no approved clothing classifier is present. The default **Redact uncertain content** setting covers these boxes. This can mask ordinary people and is a conservative trade-off, not swimwear classification.
 
-Balanced additionally scans up to nine overlapping tiles with the ViT only when EfficientDet returns no people. If people are detected, the tile fallback is not run; unrelated media outside those boxes may be missed. Fast has no tile fallback. Thresholds are engineering starting values and are not calibrated or benchmarked for this product.
+Balanced additionally scans up to nine overlapping tiles with the ViT only when EfficientDet returns no people. Those tile detections do not create rectangular overlays: they are intersected with the same full-frame body/clothing mask and must pass the universal 35% / 45% pixel-coverage limits. If people are detected, tile fallback is not run; unrelated media outside those boxes may be missed. Fast has no tile fallback. Thresholds are engineering starting values and are not calibrated or benchmarked for this product.
 
-## Excluded candidates
+## Candidate review update (2026-11-03)
 
-The following candidates are not present in selectable profiles or the active model catalog:
+A wider review of swimwear-specific models is recorded in [`MODEL_CANDIDATE_REVIEW_2026-11-03.md`](MODEL_CANDIDATE_REVIEW_2026-11-03.md). The decision is unchanged: no new candidate is admitted to the downloadable catalog, and `SWIMWEAR_AWARE` remains disabled.
 
-- **Electblake Clothing Type EfficientNetV2-S:** five labels, including `swim_bikini`, but no generic `other`/ordinary-clothing class; limited publisher dataset/evaluation and no sufficiently broad swimwear coverage. Its old downloaded artifact is deleted on app startup/upgrade.
-- **Electblake RT-DETRv2:** potentially interesting because it advertises `swim` and `swim_sports` boxes, but the reviewed checkpoint is Safetensors/Transformers rather than a validated Android ONNX/TFLite artifact. Its model card describes private/pseudo-labelled data and generalization limitations. It is not admitted until a no-training export is reproducible, hash-pinned, license-reviewed and Android-tested.
-- **Desert Ant Labs Moderator:** recurring online license validation conflicts with the offline inference and download-only network policy.
-- **NSFWJS:** no approved, pinned Android model artifact/runtime adapter in this project.
-- **NudeNet:** body-part detector rather than a swimwear classifier; artifact/license provenance needs more review.
+### Candidates not admitted
+
+- **Electblake Clothing Type EfficientNetV2-S:** this is not merely a PyTorch checkpoint; the repository lists a direct FP32 ONNX artifact and declares MIT for the fine-tuned model (Apache-2.0 for its base). It predicts only `denim_shorts`, `lingerie`, `maid`, `nurse`, or `swim_bikini`. It has no `other`/ordinary-clothing/rejection class, always selects one of its five labels, and the publisher says its softmax scores are uncalibrated. Its 89.73% figure is a validation/model-selection result, not an independent benchmark. The 81.8 MB ONNX artifact has not been pinned, hash-verified, evaluated on ScreenVeil screenshots, or tested on Android. It is a possible isolated research experiment, not an allow/deny model.
+- **Electblake RT-DETRv2 R18vd:** this is the most directly relevant newly reviewed clothing-box detector because its labels include `swim` and `swim_sports`. Hugging Face declares Apache-2.0, but the listed 80.5 MB artifact is Safetensors, not ONNX/TFLite. Its model card documents private training data, YOLO-World-generated pseudo-labels, eight epochs, private validation only, no independent benchmark, incomplete labels, and that the intended use is experimental indexing rather than safety-critical decisions. It remains a research/export candidate until no-training export, parity, licensing, Android and representative validation gates pass.
+- **Desert Ant Labs Moderator:** do not describe this as requiring a remote inference service; the vendor documents on-device Android/Kotlin inference. Its Source-Available License v1.0 is not an OSI open-source licence, requires visible attribution, and requires a commercial licence above 100,000 monthly active devices per platform/model. The currently reviewed API describes general NSFW scores/regions, not a swimwear class. It is a separate vendor-licensed option, not part of the current catalog.
+- **NSFWJS:** its TensorFlow.js model predicts Drawing, Hentai, Neutral, Porn and Sexy, not swimwear. It is a JavaScript integration path rather than a ready-made native Kotlin ONNX/TFLite adapter in this project.
+- **NudeNet:** its reviewed 320×320/640×640 ONNX detector exposes anatomical exposed/covered body-part labels, not swimwear garment labels. The exact repository/package/model lineage and licence must be reconciled before reuse; a similarly named fork does not prove the licence of another package's weights.
 - **IBM/ETH ScreenParser:** identifies screen-layout elements such as images/video, not adult content; available detector/runtime licensing and Android execution were not admitted.
-- **Ultralytics Open Images YOLO exports:** the associated Open Images label set includes `Swimwear`, but the reviewed Ultralytics model/configuration is under AGPL-3.0. It is excluded from this Apache-2.0 distribution unless a separate licensing decision is made.
+- **Ultralytics Open Images YOLO exports:** the reviewed Ultralytics implementation/export is under AGPL-3.0. It is excluded from this Apache-2.0 distribution unless a separate licensing decision is made.
 - **Genlook product-photo classifier:** not intended for decisions about people.
 
 ### Preferred future swimwear detector: Google MobileNet V2 SSD · Open Images V4
 
-This is the strongest candidate found so far under the balanced license policy:
+This remains the preferred **production-conversion candidate** under the current model source and licensing policy, not an approved runtime model:
 
-- The Google-published Kaggle model is an SSD MobileNet V2 detector trained on Open Images V4, declares Apache-2.0 and reports 600 boxable categories. The published SavedModel artifact is about 63.36 MB; its reported overall Open Images V4 mAP is 0.34, not a swimwear-specific metric.
-- The Open Images V4 class list explicitly includes `Swimwear`, `Brassiere`, `Shorts` and `Person`. The model output contract includes bounding boxes, class names/labels and scores.
-- It is not yet admitted to the app: the reviewed Google artifact is distributed as a SavedModel, not as a pinned TFLite Android artifact. Its exact exported TFLite bytes, metadata/class map, input normalization, output tensor contract and device behavior are therefore not yet verified.
-- TensorFlow documents conversion of eligible SSD Detection API models to TFLite for mobile use. The exact OIDv4 checkpoint still needs a reproducible conversion using a compatible TensorFlow Object Detection API version, with no training or fine-tuning. The export must then be tested against the source SavedModel on fixed images, carry the correct `Swimwear` label map/metadata (or use a custom TFLite Interpreter adapter), receive an exact SHA-256 and size bounds, and run successfully on Android.
+- Google's model card describes an SSD + MobileNet V2 detector trained on Open Images V4, 600 boxable categories, Apache-2.0, and a SavedModel artifact of approximately 63.36 MB. The reported overall dataset mAP is not a swimwear-specific metric.
+- The Open Images V4 taxonomy includes `Swimwear` alongside `Person` and other object classes. Dataset annotation licensing and image licensing are separate from the model-card licence; the Open Images page says annotations are CC BY 4.0 and asks users to verify individual image licences.
+- The model reviewed is a SavedModel, not a pinned Android TFLite artifact. Its exact exported bytes, label map, input normalization, output tensor contract and device behavior are unverified.
+- TensorFlow documents an SSD TFLite export path. The exact OIDv4 checkpoint still needs a reproducible conversion with pinned tooling, source-vs-export parity, verified `Swimwear` class mapping, actual TFLite metadata/adapter contract, exact SHA-256 and size bounds, and Galaxy S24 FE testing.
 
-This model meets the license/provenance screen as a *candidate*, but not the artifact/runtime approval gate. A disabled `SWIMWEAR_AWARE` profile entry is now present so the intended profile is visible without implying it can be installed. Its required-model list is intentionally empty, the profile is excluded by `ModelProfile.fromStored`, the UI disables selection, and the service refuses initialization. The candidate is not in `SpecializedModelCatalog.all`, so the downloader cannot fetch it. Do not enable it before conversion and validation. Until then, **ScreenVeil has no approved swimwear-specific model**.
+A separate Electblake RT-DETRv2 candidate has more explicit swimwear-oriented labels but weaker provenance of training data and no directly listed mobile artifact. The EfficientNet classifier has direct ONNX, but its closed five-class label set means its score cannot be treated as a safe negative. Neither displaces the Google candidate for the production conversion track under the current policy.
+
+The disabled profile's required-model list remains empty, it is excluded by `ModelProfile.fromStored`, the UI disables selection, and the service refuses initialization. The candidate is not in `SpecializedModelCatalog.all`, so the downloader cannot fetch it. Until an admitted detector passes the documented gates, **ScreenVeil has no approved swimwear-specific model**.
 
 ## Security and approval limitations
 
