@@ -46,6 +46,10 @@ Before installing on the phone:
 3. Download the debug APK artifact (not the unsigned release APK).
 4. Follow `docs/DEVICE_VALIDATION.md` on the Galaxy S24 FE. Validate body-mask alignment, false positives/misses, stop controls, coverage limits, watchdogs, process restart after timeout, five-minute auto-stop, performance, heat, RAM and battery.
 
+## 2026-11-03 CI compiler corrections
+
+The subsequent GitHub Actions run reached `:app:compileDebugKotlin` and reported three source-level errors. These were corrected in the follow-up package: the coverage watchdog now uses an explicitly typed `Runnable` object expression; the synthetic segmentation mask builds a `ByteArray` directly; and the overlay reads `PixelBounds.width` / `height` as properties. The corrections preserve the safety thresholds, timers, segmentation policy, model catalog and dependencies. See `docs/CI_COMPILATION_FIX_2026-11-03.md` for the exact diagnosis and validation boundary. A full Android Gradle build still needs to be rerun in GitHub Actions; it has not been claimed as passing locally.
+
 ## Important functional limitations
 
 - Segmentation localizes body-skin and clothing pixels; it does not decide whether clothing is swimwear and does not anatomically separate hands/arms/torso/legs.

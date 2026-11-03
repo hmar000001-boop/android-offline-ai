@@ -47,3 +47,8 @@ This addendum treats the user's ten-part R6 safety and segmentation report as co
 The user confirms that every point in the supplied R6 safety-hardening/body-segmentation report is completed. None of those points is treated as an outstanding implementation task by this addendum. The original candidate review is retained as historical model research, not a backlog.
 
 The source tree packaged here is based on the exact R6 source ZIP available in this conversation (`ScreenVeil-1.6.0-R6-safety-body-segmentation.zip`). No newer source archive or local working-tree changes were provided in this turn. Therefore, this ZIP faithfully preserves that available source snapshot and adds the research documentation; it cannot include any subsequent source changes that were not present in the supplied archive. Runtime source, model catalog, dependencies and profiles were not modified.
+
+
+## Build correction included in the follow-up source package
+
+The CI Kotlin compilation errors received after this research pass have also been corrected in the source tree. This correction is separate from the model research and does not alter any model or inference configuration. See `docs/CI_COMPILATION_FIX_2026-11-03.md`. The Android Gradle build must still be rerun in GitHub Actions.

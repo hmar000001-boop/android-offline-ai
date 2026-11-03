@@ -137,7 +137,7 @@ class BodySegmentationMask private constructor(
             }
             return BodySegmentationMask(
                 width, height, frameWidth, frameHeight,
-                dilate(categories.map { if (it.toInt() != 0) 1 else 0 }.toByteArray(), width, height, 2),
+                dilate(ByteArray(categories.size) { index -> if (categories[index].toInt() != 0) 1.toByte() else 0.toByte() }, width, height, 2),
                 0, 0, width, height
             )
         }

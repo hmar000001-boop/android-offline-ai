@@ -108,10 +108,10 @@ open class OverlayController(
                     // Rasterize at the exact destination dimensions before enforcing the per-region
                     // limit. This measures the alpha pixels that will actually be drawn rather
                     // than estimating screen area from source-box proportions.
-                    rasterizedRegion = if (redacted.width == target.width() && redacted.height == target.height()) {
+                    rasterizedRegion = if (redacted.width == target.width && redacted.height == target.height) {
                         redacted
                     } else {
-                        Bitmap.createScaledBitmap(redacted, target.width(), target.height(), true)
+                        Bitmap.createScaledBitmap(redacted, target.width, target.height, true)
                     }
                     val regionCoverage = BitmapRedactor.countVisiblePixels(rasterizedRegion).toDouble() /
                         (width.toDouble() * height.toDouble())

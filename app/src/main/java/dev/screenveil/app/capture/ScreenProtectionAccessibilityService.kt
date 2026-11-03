@@ -75,20 +75,22 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private var screenshotTimeoutRunnable: Runnable? = null
     private var inferenceTimeoutRunnable: Runnable? = null
     private var sessionTimeoutRunnable: Runnable? = null
-    private val coverageWatchdog = Runnable {
-        val threshold = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogThresholdOverride
-            ?: CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD else CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD
-        val dwellMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogDwellMsOverride
-            ?: CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS else CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS
-        if (!destroyed && monitoringRequested && lastAppliedCoverageFraction >= threshold) {
-            val elapsed = SystemClock.elapsedRealtime() - highCoverageSinceMs
-            if (highCoverageSinceMs > 0L && elapsed >= dwellMs) {
-                stopForSafety(
-                    "Protection automatically stopped because body redaction stayed above the safety coverage threshold for 3 seconds. The screen is visible.",
-                    "Coverage watchdog: ${"%.2f".format(java.util.Locale.US, lastAppliedCoverageFraction)} sustained for ${elapsed}ms"
-                )
-            } else if (highCoverageSinceMs > 0L) {
-                mainHandler.postDelayed(this.coverageWatchdog, (dwellMs - elapsed).coerceAtLeast(1L))
+    private val coverageWatchdog: Runnable = object : Runnable {
+        override fun run() {
+            val threshold = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogThresholdOverride
+                ?: CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD else CoveragePolicy.COVERAGE_WATCHDOG_THRESHOLD
+            val dwellMs = if (BuildConfig.DEBUG) ScreenVeilTestHooks.coverageWatchdogDwellMsOverride
+                ?: CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS else CoveragePolicy.COVERAGE_WATCHDOG_DWELL_MS
+            if (!destroyed && monitoringRequested && lastAppliedCoverageFraction >= threshold) {
+                val elapsed = SystemClock.elapsedRealtime() - highCoverageSinceMs
+                if (highCoverageSinceMs > 0L && elapsed >= dwellMs) {
+                    stopForSafety(
+                        "Protection automatically stopped because body redaction stayed above the safety coverage threshold for 3 seconds. The screen is visible.",
+                        "Coverage watchdog: ${"%.2f".format(java.util.Locale.US, lastAppliedCoverageFraction)} sustained for ${elapsed}ms"
+                    )
+                } else if (highCoverageSinceMs > 0L) {
+                    mainHandler.postDelayed(this, (dwellMs - elapsed).coerceAtLeast(1L))
+                }
             }
         }
     }
