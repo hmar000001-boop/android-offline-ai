@@ -40,6 +40,22 @@ class DetectionResponseParserTest {
         assertFalse(DetectionResponseParser.parse(response).parseSucceeded)
     }
 
+    private fun region(decision: String, left: Int) =
+        """{"box":[$left,100,${left + 40},200],"media_type":"image","decision":"$decision"}"""
+
+    @Test fun denseGalleryKeepsTheMostSensitiveRegionsInsteadOfFailingOpen() {
+        val regions = (0 until 30).map { region(if (it >= 28) "explicit" else "allow", it * 30) }
+        val parsed = DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}]}""")
+        assertTrue(parsed.parseSucceeded)
+        assertEquals(24, parsed.regions.size)
+        assertEquals(2, parsed.regions.count { it.decision == ContentDecision.EXPLICIT })
+    }
+
+    @Test fun absurdRegionCountIsStillRejected() {
+        val regions = (0 until 70).map { region("allow", (it % 900)) }
+        assertFalse(DetectionResponseParser.parse("""{"regions":[${regions.joinToString(",")}]}""").parseSucceeded)
+    }
+
     @Test fun emptyRegionListIsAValidScreenWithNoDetectedMedia() {
         val parsed = DetectionResponseParser.parse("""{"regions":[]}""")
         assertTrue(parsed.parseSucceeded)

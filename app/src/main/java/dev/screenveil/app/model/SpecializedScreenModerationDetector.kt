@@ -25,8 +25,8 @@ import kotlin.math.pow
  *
  * Google EfficientDet-Lite0 locates people. Yahoo OpenNSFW and the optional ViT classifier
  * estimate general NSFW content. Neither classifier identifies swimwear or clothing categories.
- * Non-explicit person boxes are returned as UNCERTAIN, so the default redact-uncertain setting
- * covers them rather than pretending the classifiers proved the clothing safe.
+ * People are EXPLICIT (high score), UNCERTAIN (moderate score) or PERSON_LOW_RISK (low score, not a
+ * clothing verdict). PERSON_LOW_RISK is covered only when the user turns on strict mode.
  */
 class SpecializedScreenModerationDetector(private val context: Context) : ScreenContentDetector {
     private var personDetector: ObjectDetector? = null
@@ -132,12 +132,16 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 val openNsfwScore = classifyOpenNsfw(crop, nsfw, env)
                 val vitNsfwScore = vitNsfw?.let { classifyVitNsfw(crop, it, env) } ?: 0f
                 val ensembleScore = max(openNsfwScore, vitNsfwScore)
-                if (SpecialistDecisionPolicy.isNsfwFlagged(ensembleScore, PERSON_EXPLICIT_THRESHOLD)) {
-                    ContentDecision.EXPLICIT
-                } else {
-                    // There is deliberately no admitted clothing/swimwear classifier in this
-                    // catalog. Do not convert a low NSFW score into an ALLOW decision.
-                    ContentDecision.UNCERTAIN
+                when {
+                    SpecialistDecisionPolicy.isNsfwFlagged(ensembleScore, PERSON_EXPLICIT_THRESHOLD) ->
+                        ContentDecision.EXPLICIT
+                    SpecialistDecisionPolicy.isNsfwFlagged(ensembleScore, PERSON_UNCERTAIN_THRESHOLD) ->
+                        ContentDecision.UNCERTAIN
+                    // Both classifiers scored the person low. There is no clothing/swimwear model, so
+                    // this is not an ALLOW verdict: it is PERSON_LOW_RISK, covered only when the user
+                    // enables "Cover every detected person". Covering every person by default made
+                    // portraits, video calls and avatars blur the whole screen.
+                    else -> ContentDecision.PERSON_LOW_RISK
                 }
             } finally {
                 crop.recycle()
@@ -160,7 +164,7 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
             regions = regions,
             parseSucceeded = true,
             diagnostic = buildString {
-                append("Offline NSFW ensemble · ${regions.size} person region(s); non-explicit people are UNCERTAIN because no clothing model is approved.")
+                append("Offline NSFW ensemble · ${regions.size} person region(s); low-scoring people are PERSON_LOW_RISK (not a clothing verdict) and are covered only in strict mode.")
                 if (detectionsTruncated) append(" More than $MAX_PERSON_CROPS people were detected; lower-ranked person boxes were not evaluated.")
                 append(" Whole-screen scoring is disabled to prevent global redaction.")
             }
@@ -222,16 +226,22 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 crop.recycle()
             }
             if (SpecialistDecisionPolicy.isNsfwFlagged(score, SCREEN_TILE_EXPLICIT_THRESHOLD)) {
-                results += DetectedMediaRegion(
-                    box = NormalizedBox(
-                        (left.toFloat() / bitmap.width * 1000f).toInt().coerceIn(0, 1000),
-                        (top.toFloat() / bitmap.height * 1000f).toInt().coerceIn(0, 1000),
-                        ((left + tileWidth).toFloat() / bitmap.width * 1000f).toInt().coerceIn(0, 1000),
-                        ((top + tileHeight).toFloat() / bitmap.height * 1000f).toInt().coerceIn(0, 1000)
-                    ),
-                    decision = ContentDecision.EXPLICIT,
-                    mediaType = "image"
+                // Round outward so a tile's edge pixels are never left uncovered.
+                val tileBox = DetectionBoxNormalizer.fromPixelBounds(
+                    left = left.toFloat(),
+                    top = top.toFloat(),
+                    right = (left + tileWidth).toFloat(),
+                    bottom = (top + tileHeight).toFloat(),
+                    imageWidth = bitmap.width,
+                    imageHeight = bitmap.height
                 )
+                if (tileBox != null) {
+                    results += DetectedMediaRegion(
+                        box = tileBox,
+                        decision = ContentDecision.EXPLICIT,
+                        mediaType = "image"
+                    )
+                }
             }
         }
         return results
@@ -256,6 +266,8 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         private const val MAX_PERSON_CROPS = 24
         private const val MIN_PERSON_CROP_SIDE = 24
         private const val PERSON_EXPLICIT_THRESHOLD = 0.82f
+        // Uncalibrated: a person whose ensemble NSFW score is at least this is covered as UNCERTAIN.
+        private const val PERSON_UNCERTAIN_THRESHOLD = 0.25f
         private const val SCREEN_TILE_EXPLICIT_THRESHOLD = 0.90f
         private const val MAX_SCREEN_TILES = 9
     }

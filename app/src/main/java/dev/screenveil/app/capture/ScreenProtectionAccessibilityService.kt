@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.screenveil.app.AppPreferences
 import dev.screenveil.app.BuildConfig
+import dev.screenveil.app.diagnostics.DiagnosticLog
 import dev.screenveil.app.model.DetectedMediaRegion
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
@@ -22,8 +23,10 @@ import dev.screenveil.app.model.ModelIds
 import dev.screenveil.app.model.ModelFiles
 import dev.screenveil.app.model.ScreenContentDetector
 import dev.screenveil.app.model.ScreenModerationDetector
+import dev.screenveil.app.model.TemporaryFrameFiles
 import dev.screenveil.app.model.SpecializedScreenModerationDetector
 import dev.screenveil.app.overlay.OverlayController
+import dev.screenveil.app.policy.CoveragePolicy
 import dev.screenveil.app.policy.ModerationPolicy
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -63,6 +66,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
     private val captureSequence = AtomicLong(0L)
     // Read/written only by main-thread overlay commits.
     private var lastAppliedCaptureSequence = 0L
+    // Main thread only: when the window first became (almost) entirely covered in the current streak.
+    private var fullCoverSinceMs = 0L
+    private var lastLoggedOverlaySummary = ""
+    private var lastLoggedCaptureNote = ""
 
     @Volatile private var connected = false
     @Volatile private var monitoringRequested = false
@@ -119,6 +126,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         connected = true
         destroyed = false
         currentInstance = this
+        TemporaryFrameFiles.removeAbandoned(this)
+        DiagnosticLog.record(this, "SERVICE connected sdk=${Build.VERSION.SDK_INT}")
         overlay = if (BuildConfig.DEBUG) {
             ScreenVeilTestHooks.overlayFactory?.invoke(this)
         } else null
@@ -251,6 +260,10 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         monitoringRequested = true
         preferences.setProtectionEnabled(true)
         consecutiveCaptureFailures.set(0)
+        fullCoverSinceMs = 0L
+        ProtectionNotifier.clearPaused(this)
+        ProtectionNotifier.showActive(this)
+        DiagnosticLog.record(this, "START profile=${requestedProfile.name}")
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = true,
@@ -286,8 +299,11 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         contentChangeBurstPending = false
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
+        fullCoverSinceMs = 0L
         maskGeneration.incrementAndGet()
         overlay?.clear()
+        ProtectionNotifier.clearActive(this)
+        DiagnosticLog.record(this, "PAUSE $message")
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = false,
@@ -397,17 +413,33 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
     private data class ScreenshotTarget(val windowId: Int, val screenBounds: Rect)
 
+    /** `systemPanelOpen` is true while a large, focused system window (shade, lock screen) is showing. */
+    private data class WindowScan(val target: ScreenshotTarget?, val systemPanelOpen: Boolean)
+
     /**
      * Select the active application window and capture that window alone. Android documents
      * takeScreenshotOfWindow() specifically for capturing content underneath accessibility
      * overlays, avoiding feedback from ScreenVeil's own redaction windows.
      */
-    private fun findScreenshotTarget(): ScreenshotTarget? {
+    private fun findScreenshotTarget(): WindowScan {
         val availableWindows = windows
         var selected: AccessibilityWindowInfo? = null
         var selectedBounds: Rect? = null
+        var systemPanelOpen = false
+        val displayBounds = getSystemService(android.view.WindowManager::class.java).maximumWindowMetrics.bounds
+        val displayArea = displayBounds.width().toLong() * displayBounds.height()
         try {
             for (window in availableWindows) {
+                if (window.type == AccessibilityWindowInfo.TYPE_SYSTEM && (window.isActive || window.isFocused)) {
+                    // The notification shade / Quick Settings / lock screen must never sit under a
+                    // stale mask: it is where the Stop controls live.
+                    val systemBounds = Rect()
+                    window.getBoundsInScreen(systemBounds)
+                    if (displayArea > 0 && systemBounds.width().toLong() * systemBounds.height() * 100 >= displayArea * 40) {
+                        systemPanelOpen = true
+                    }
+                    continue
+                }
                 if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION || !window.isActive) continue
                 val bounds = Rect()
                 window.getBoundsInScreen(bounds)
@@ -419,8 +451,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     selectedBounds = bounds
                 }
             }
-            val winner = selected ?: return null
-            return ScreenshotTarget(winner.id, Rect(checkNotNull(selectedBounds)))
+            val winner = selected ?: return WindowScan(null, systemPanelOpen)
+            return WindowScan(ScreenshotTarget(winner.id, Rect(checkNotNull(selectedBounds))), systemPanelOpen)
         } finally {
             // AccessibilityWindowInfo objects are managed by the framework. Do not retain them
             // beyond this method; only a primitive ID and a copied Rect leave this scope.
@@ -458,7 +490,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         }
 
         val requestSequence = captureSequence.incrementAndGet()
-        val target = try {
+        val scan = try {
             findScreenshotTarget()
         } catch (error: Throwable) {
             lastScreenshotTarget = "window enumeration failed: ${error.message ?: error.javaClass.simpleName}"
@@ -471,9 +503,20 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             )
             return
         }
+        if (scan.systemPanelOpen) {
+            lastScreenshotTarget = "system panel is active; masks paused"
+            noteCapture("SYSTEM_PANEL masks cleared")
+            finishScreenshotRequest()
+            if (activeRedactions.isNotEmpty()) clearMasks()
+            return
+        }
+        val target = scan.target
         if (target == null) {
             lastScreenshotTarget = "no active application window; foregroundPackage=$currentForegroundPackage"
+            noteCapture("NO_ACTIVE_APP_WINDOW")
             finishScreenshotRequest()
+            // Nothing to protect and nothing to anchor a mask to: never leave a stale overlay up.
+            if (activeRedactions.isNotEmpty()) clearMasks()
             ProtectionStatus.update(
                 ProtectionStatus.state.value.copy(
                     active = monitoringRequested,
@@ -698,8 +741,17 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     }
                     consecutiveModelFailures = 0
 
-                    val redactions = result.regions.filter {
-                        ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain)
+                    val limited = CoveragePolicy.limit(
+                        result.regions.filter {
+                            ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain, settings.redactAllPeople)
+                        }
+                    )
+                    val redactions = limited.kept
+                    if (limited.dropped > 0) {
+                        DiagnosticLog.record(
+                            this@ScreenProtectionAccessibilityService,
+                            "COVERAGE_LIMIT dropped=${limited.dropped} unconfirmed region(s) that would blanket the window"
+                        )
                     }
                     val prepared = overlay?.prepare(frame, redactions, settings, screenBounds)
                     postPreparedMasks(
@@ -811,6 +863,27 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     stopForSafety("Protection paused because the redaction overlay could not be updated. The screen is visible.", "Overlay rendering failed")
                     return@post
                 }
+                val coverage = prepared?.coverageFraction ?: 0.0
+                if (coverage >= CoveragePolicy.FULL_COVER_FRACTION) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (fullCoverSinceMs == 0L) {
+                        fullCoverSinceMs = now
+                    } else if (now - fullCoverSinceMs >= FULL_COVER_MAX_DWELL_MS) {
+                        stopForSafety(
+                            "Protection paused because the whole screen stayed covered for ${FULL_COVER_MAX_DWELL_MS / 1000} seconds. This looks like a detection error. The screen is visible.",
+                            "Full-window coverage ${"%.2f".format(java.util.Locale.US, coverage)} sustained"
+                        )
+                        return@post
+                    }
+                } else {
+                    fullCoverSinceMs = 0L
+                }
+                val overlaySummary = "OVERLAY detected=$detectedCount redacted=${prepared?.redactedRegions ?: 0} " +
+                    "coverage=${"%.2f".format(java.util.Locale.US, coverage)} profile=$activeProfileName"
+                if (overlaySummary != lastLoggedOverlaySummary) {
+                    lastLoggedOverlaySummary = overlaySummary
+                    DiagnosticLog.record(this, overlaySummary)
+                }
                 lastAppliedCaptureSequence = requestSequence
                 if (replacementRedactions != null) {
                     activeRedactions = replacementRedactions
@@ -920,8 +993,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         activeRedactions = emptyList()
         activeMediaRegionCount = 0
         consecutiveCaptureFailures.set(0)
+        fullCoverSinceMs = 0L
         maskGeneration.incrementAndGet()
         overlay?.clear()
+        ProtectionNotifier.clearActive(this)
+        ProtectionNotifier.showPaused(this, message)
+        DiagnosticLog.record(this, "SAFETY_STOP $message | ${detail ?: "no detail"}")
         ProtectionStatus.update(
             ProtectionStatus.State(
                 active = false,
@@ -931,6 +1008,13 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                 error = detail
             )
         )
+    }
+
+    /** Logs a capture-stage note once per change so a stuck state does not flood the diagnostic log. */
+    private fun noteCapture(note: String) {
+        if (note == lastLoggedCaptureNote) return
+        lastLoggedCaptureNote = note
+        DiagnosticLog.record(this, note)
     }
 
     private fun clearMasks() {
@@ -966,9 +1050,14 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
 
     private fun shutdownService(message: String) {
         if (destroyed) return
+        val wasProtecting = monitoringRequested
         destroyed = true
         connected = false
         monitoringRequested = false
+        fullCoverSinceMs = 0L
+        ProtectionNotifier.clearActive(this)
+        if (wasProtecting) ProtectionNotifier.showPaused(this, "$message - the screen is no longer protected.")
+        DiagnosticLog.record(this, "SHUTDOWN $message wasProtecting=$wasProtecting")
         suppressPlatformAccessibilityEventsForTest = false
         runCatching { preferences.setProtectionEnabled(false) }
         captureRequestedWhileBusy.set(false)
@@ -1008,6 +1097,8 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
         private const val RETRY_AFTER_ANALYSIS_FAILURE_MS = 900L
         private const val MAX_CONSECUTIVE_MODEL_FAILURES = 3
         private const val MAX_CONSECUTIVE_CAPTURE_FAILURES = 5
+        // Sustained near-total coverage is far more likely a detection error than real content.
+        private const val FULL_COVER_MAX_DWELL_MS = 30_000L
 
         @Volatile private var currentInstance: ScreenProtectionAccessibilityService? = null
 

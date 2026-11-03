@@ -2,4 +2,5 @@
     <string name="app_name">ScreenVeil</string>
     <string name="accessibility_service_label">ScreenVeil screen protection</string>
     <string name="accessibility_service_description">Uses Android accessibility screenshot APIs to capture the active app window for on-device visual moderation. Reads window metadata and bounds, but does not read app text, operate controls, or perform gestures.</string>
+    <string name="tile_label">ScreenVeil</string>
 </resources>

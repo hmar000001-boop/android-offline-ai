@@ -12,9 +12,33 @@ android {
         applicationId = "dev.screenveil.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.5.1"
+        versionCode = 8
+        versionName = "1.5.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release signing is read from the environment so no secret is committed. Without these
+    // variables `assembleRelease` still builds (R8 verified) but produces an UNSIGNED apk.
+    val releaseKeystore = System.getenv("SCREENVEIL_KEYSTORE_FILE")
+    if (!releaseKeystore.isNullOrBlank()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("SCREENVEIL_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SCREENVEIL_KEY_ALIAS")
+                keyPassword = System.getenv("SCREENVEIL_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            isDebuggable = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (!releaseKeystore.isNullOrBlank()) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures {

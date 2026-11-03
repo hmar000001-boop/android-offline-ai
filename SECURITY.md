@@ -5,7 +5,7 @@ ScreenVeil is experimental software that processes screenshots from the active a
 ## Network and data handling
 
 - The only application code that opens a network connection is `ModelInstaller`, and it is called from the explicit model-download UI action.
-- Downloads are restricted to fixed catalog URLs using HTTPS. Redirects are followed manually and every hop must remain on an approved hosting domain. Arbitrary URLs and user-imported models are not supported.
+- Downloads are restricted to fixed catalog URLs using HTTPS. Redirects are followed manually and every hop must remain on an exactly approved host (`storage.googleapis.com`, `huggingface.co`/`hf.co` and their subdomains, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`); GitHub user-content subdomains are rejected. Arbitrary URLs and user-imported models are not supported.
 - Each artifact has an exact SHA-256 and lower/upper byte bounds. Bytes are streamed to a temporary file and the artifact is moved to its final private-storage path only after size and SHA-256 checks succeed.
 - SHA-256 establishes byte identity with the pinned catalog; it does not prove that the publisher, model architecture, model behavior or binary is safe.
 - Screenshots are processed locally and are not uploaded by ScreenVeil. The temporary image passed to LiteRT-LM is stored under the app's private cache directory and deleted after inference; stale `screenveil-frame-*` files are removed on app startup.
@@ -18,7 +18,15 @@ The service reads event metadata and active-window IDs/bounds solely to schedule
 
 ## Failure behavior
 
-For notified window changes, scrolling, any window-content-change event and technical capture/inference/formatting failures, the service attempts to replace detailed masks with an opaque app-window cover and retry. After three consecutive model/structured-output failures it stops repeated expensive inference, retains the cover and requires the user to stop/restart protection to retry. An accessibility interruption retains the cover while the service remains connected; if Android disables or destroys the service, the overlay cannot be guaranteed to survive. If the overlay itself cannot be displayed, the UI reports a critical error; do not represent that state as protected. A syntactically valid but visually incorrect model response, including a missed media region or incorrect `allow`, remains a detection false negative and is not eliminated by this fallback.
+ScreenVeil fails **open**, deliberately: a technical failure must never lock the user's screen. After a failed capture, inference or overlay update it keeps the last localized masks for a bounded number of retries (3 model failures, 5 capture failures), then pauses, removes its overlay and posts a "ScreenVeil paused - screen is NOT protected" notification. There is no opaque whole-window fallback.
+
+Protection also pauses itself when Android forbids a capture (FLAG_SECURE windows), when the service is interrupted or unbound, and when the whole window stays covered for 30 seconds (treated as a probable detection error). Masks are lifted while the notification shade or lock screen is the active window.
+
+Emergency stop: the ongoing notification has a Stop action, and a Quick Settings tile toggles protection without needing to see the covered screen.
+
+Detection limits that remain: masks are removed on every scroll, window or content change and re-drawn after the next analysis (roughly 0.5-2 s), so content can be visible during that window. A missed region or an incorrect `allow` is a false negative that no fallback can recover. The Gemma profile reads text that appears on screen and can be steered by it (prompt injection); treat it as experimental. Unconfirmed (`UNCERTAIN` / person-only) regions that would cover 70% of the window or more are discarded.
+
+Diagnostics: `diagnostics.log` in private storage records events and counts only (no screenshots, detected content, on-screen text or app names). It is never uploaded; the user can copy or clear it in the app.
 
 ## Model supply-chain requirements
 

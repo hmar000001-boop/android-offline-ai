@@ -9,12 +9,12 @@ enum class ModelProfile(
 ) {
     BALANCED_SPECIALIZED(
         title = "Balanced multi-model · offline",
-        description = "One EfficientDet person detector + two independent general NSFW classifiers, including a tiled fallback. No Gemma. This profile has no validated swimwear-specific detector; uncertain person regions are redacted when the conservative setting is enabled.",
+        description = "One EfficientDet person detector + two independent general NSFW classifiers, including a tiled fallback. No Gemma. This profile has no validated swimwear-specific detector; people with a moderate NSFW score are covered as uncertain, and every detected person can be covered with the strict-mode switch.",
         requiredModels = SpecializedModelCatalog.ensembleProfileModels
     ),
     FAST_SPECIALIZED(
         title = "Fast specialized · offline",
-        description = "One EfficientDet person detector + one general NSFW classifier. No Gemma and no tile fallback. It does not classify clothing or guarantee swimwear detection.",
+        description = "One EfficientDet person detector + one general NSFW classifier. No Gemma and no tile fallback. It does not classify clothing or guarantee swimwear detection; strict mode covers every detected person.",
         requiredModels = SpecializedModelCatalog.fastProfileModels
     ),
     SWIMWEAR_AWARE(
@@ -28,7 +28,7 @@ enum class ModelProfile(
     ),
     GEMMA_VISION(
         title = "Gemma 4 vision · optional",
-        description = "General-purpose multimodal screenshot analysis. Large download, higher memory use and slower startup; separate from both specialist profiles.",
+        description = "Experimental. General-purpose multimodal screenshot analysis. Large download, higher memory use and slower startup. A language model can be steered by text shown on screen, so this profile can be tricked into skipping content; prefer Balanced.",
         requiredModels = listOf(GemmaModelCatalog.selected)
     );
 

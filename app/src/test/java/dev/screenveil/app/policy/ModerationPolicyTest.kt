@@ -18,6 +18,13 @@ class ModerationPolicyTest {
         assertTrue(ModerationPolicy.shouldRedact(ContentDecision.EXPLICIT, redactUncertain = false))
     }
 
+    @Test fun lowRiskPeopleAreCoveredOnlyInStrictMode() {
+        assertFalse(ModerationPolicy.shouldRedact(ContentDecision.PERSON_LOW_RISK, redactUncertain = true))
+        assertTrue(
+            ModerationPolicy.shouldRedact(ContentDecision.PERSON_LOW_RISK, redactUncertain = false, redactAllPeople = true)
+        )
+    }
+
     @Test fun uncertainPolicyIsConfigurable() {
         assertTrue(ModerationPolicy.shouldRedact(ContentDecision.UNCERTAIN, redactUncertain = true))
         assertFalse(ModerationPolicy.shouldRedact(ContentDecision.UNCERTAIN, redactUncertain = false))

@@ -61,7 +61,7 @@ A model can still be inaccurate or malicious despite a valid hash. The catalog i
 ## Product policy
 
 - Explicit and detected NSFW content is intended to be redacted.
-- Uncertain person regions are redacted by default.
+- Moderately NSFW-scoring person regions (`UNCERTAIN`) are redacted by default; low-scoring people are covered only with the **Cover every detected person (strict)** switch.
 - The user can choose blur, pixelation or opaque cover, change intensity and tune the screenshot interval.
 - The policy layer is deterministic after model output, but it cannot correct a model that misses a region or incorrectly labels content as safe.
 
@@ -93,7 +93,7 @@ Pinned versions are in `settings.gradle.kts` and `app/build.gradle.kts`. CI uses
 ./gradlew --no-daemon clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-The GitHub Actions workflow builds a debug APK, uploads unit-test / lint reports and the full Gradle log, then runs the Accessibility lifecycle instrumentation suite on Android API 34 and API 36 emulators and uploads its reports. The suite includes successful capture/inference-to-overlay flow with deterministic fake outputs, one test using Android's real `takeScreenshotOfWindow()` API, event-storm debounce, model/capture/render failures, Stop, interruption, service unbind and pixel-level localized-mask checks. See `docs/EMULATOR_TEST_COVERAGE.md`. The local wrapper script checks the pinned Gradle distribution SHA-256; the binary wrapper JAR is not included.
+The GitHub Actions workflow builds a debug APK (for testing only; it is debuggable) and, in a separate job, an R8-minified release APK (signed when the `SCREENVEIL_KEYSTORE_BASE64`, `SCREENVEIL_KEYSTORE_PASSWORD`, `SCREENVEIL_KEY_ALIAS` and `SCREENVEIL_KEY_PASSWORD` secrets exist, otherwise unsigned), uploads unit-test / lint reports and the full Gradle log, then runs the Accessibility lifecycle instrumentation suite on Android API 34 and API 36 emulators and uploads its reports. The suite includes successful capture/inference-to-overlay flow with deterministic fake outputs, one test using Android's real `takeScreenshotOfWindow()` API, event-storm debounce, model/capture/render failures, Stop, interruption, service unbind and pixel-level localized-mask checks. See `docs/EMULATOR_TEST_COVERAGE.md`. The local wrapper script checks the pinned Gradle distribution SHA-256; the binary wrapper JAR is not included.
 
 ## Verification status
 

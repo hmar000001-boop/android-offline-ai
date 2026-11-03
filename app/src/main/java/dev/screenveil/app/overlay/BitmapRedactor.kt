@@ -39,7 +39,7 @@ object BitmapRedactor {
     }
 
     private fun pixelate(source: Bitmap, intensity: Int): Bitmap {
-        val block = (intensity / 2).coerceIn(3, 16)
+        val block = RedactionStrength.pixelBlock(source.width, source.height, intensity)
         val smallWidth = max(1, source.width / block)
         val smallHeight = max(1, source.height / block)
         val small = Bitmap.createScaledBitmap(source, smallWidth, smallHeight, false)
@@ -51,7 +51,7 @@ object BitmapRedactor {
     /** Three horizontal/vertical box passes approximate a Gaussian blur without RenderScript. */
     private fun boxGaussianApproximation(source: Bitmap, intensity: Int): Bitmap {
         var working = source
-        val radius = max(2, intensity / 3)
+        val radius = RedactionStrength.blurRadius(source.width, source.height, intensity)
         repeat(3) {
             val next = boxBlurPass(working, radius)
             if (working !== source) working.recycle()

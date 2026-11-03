@@ -25,7 +25,7 @@ object GemmaModelCatalog {
     val selected: ApprovedModelArtifact = ApprovedModelArtifact(
         id = ModelIds.GEMMA,
         displayName = "Gemma 4 E2B Instruct (LiteRT-LM)",
-        repository = "litert-community/gemma-4-E2B-it-litert-lm",
+        repository = "litert-community/Gemma-4-E2B-it-litert-lm",
         fileName = "gemma-4-E2B-it.litertlm",
         downloadUrl = "https://huggingface.co/litert-community/Gemma-4-E2B-it-litert-lm/resolve/6e5c4f1e395deb959c494953478fa5cec4b8008f/gemma-4-E2B-it.litertlm",
         sha256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",

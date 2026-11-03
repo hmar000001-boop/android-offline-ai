@@ -33,3 +33,7 @@ When protection starts, during screen reflow, or after a technical failure, cont
 ## Release status
 
 Version 1.5.1 / versionCode 7 (upgrade over the previous 1.5.0 / versionCode 6 package). This document records source changes only. Android Gradle build, instrumentation tests, emulator validation and physical-device validation have not yet been run for this hotfix. The repository now includes a 18-test `ProtectionLifecycleInstrumentedTest` suite and a GitHub Actions emulator matrix for API 34 and API 36. Coverage includes clean install/migration, Accessibility binding, missing models, successful fake inference and real screenshot capture, localized overlay output, content-change storms, model/capture/secure-window/rendering failures, active Stop, interruption and service unbind. These are test definitions, not passing results until GitHub Actions executes them. See `EMULATOR_TEST_COVERAGE.md`.
+
+## Correction (1.5.2)
+
+Item 4 above was incomplete. The detectors could still emit legitimate-looking regions that together covered the whole window: every detected person was `UNCERTAIN` and covered by default, a Gemma full-screen box was accepted, and the nine-tile ViT fallback unions to the whole screen. A tester reported the entire screen blurred and unusable on a real device. See `RELEASE_1_5_2_REVIEW_FIXES.md`.

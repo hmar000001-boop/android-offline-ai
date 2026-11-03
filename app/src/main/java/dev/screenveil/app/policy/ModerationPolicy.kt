@@ -6,7 +6,13 @@ enum class ContentDecision {
     SWIMWEAR,
     SUGGESTIVE,
     EXPLICIT,
-    UNCERTAIN
+    UNCERTAIN,
+
+    /**
+     * A person was detected but both general NSFW classifiers scored it low. This is NOT a clothing
+     * or swimwear verdict. It is covered only when the user enables "Cover every detected person".
+     */
+    PERSON_LOW_RISK
 }
 
 enum class RedactionEffect(val label: String) {
@@ -19,16 +25,22 @@ data class ModerationSettings(
     val effect: RedactionEffect = RedactionEffect.GAUSSIAN_BLUR,
     val intensity: Int = 18,
     val frameIntervalMs: Long = 1_500L,
-    val redactUncertain: Boolean = true
+    val redactUncertain: Boolean = true,
+    val redactAllPeople: Boolean = false
 )
 
 object ModerationPolicy {
     /** Swimwear is always redacted, regardless of scene or context, per the configured policy. */
-    fun shouldRedact(decision: ContentDecision, redactUncertain: Boolean): Boolean = when (decision) {
+    fun shouldRedact(
+        decision: ContentDecision,
+        redactUncertain: Boolean,
+        redactAllPeople: Boolean = false
+    ): Boolean = when (decision) {
         ContentDecision.ALLOW -> false
         ContentDecision.SWIMWEAR,
         ContentDecision.SUGGESTIVE,
         ContentDecision.EXPLICIT -> true
         ContentDecision.UNCERTAIN -> redactUncertain
+        ContentDecision.PERSON_LOW_RISK -> redactAllPeople
     }
 }

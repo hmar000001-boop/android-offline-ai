@@ -22,7 +22,7 @@ This plan is mandatory before treating ScreenVeil as a practical daily-use filte
 3. Verify ViT-Tiny NSFW ONNX input `[1,3,384,384]`, output logits `[NSFW,safe]`, softmax order, full-frame and person-crop inference.
 4. In Balanced profile with no person boxes, verify all nine overlapping ViT tiles are evaluated and each positive tile is redacted as a whole region.
 5. With one or more person detections, verify the app does not silently run tile scanning; record any media outside person boxes that is missed.
-6. Verify a person region that is not flagged by the general NSFW classifiers remains `UNCERTAIN`, never `ALLOW`. With the default uncertain-redaction setting on, verify it is covered. Record false positives on ordinary people.
+6. Verify a person with a low NSFW score becomes `PERSON_LOW_RISK` (not `ALLOW`) and is covered only with strict mode on; a moderate score is `UNCERTAIN`. With the default uncertain-redaction setting on, verify it is covered. Record false positives on ordinary people.
 7. Pass malformed dimensions, non-finite scores, unknown output names and ONNX errors. Confirm bounded retries, visible error status, protection OFF and overlay cleared; never a full-window fallback.
 8. Confirm the Fast profile has no ViT runtime/file dependency and Balanced has all three specialist artifacts. Confirm neither specialist profile loads Gemma.
 
@@ -65,3 +65,12 @@ Balanced adds a second classifier and a possible nine-tile fallback; it may be s
 ## Stop criteria
 
 Do not recommend daily use if the app crashes, leaves persistent misaligned overlays, materially misses target content, causes disruptive false positives, cannot retain a model in memory, destabilizes other apps, consumes excessive battery or thermally throttles. This application samples screenshots; it is not a guaranteed frame-by-frame video filter.
+
+## 1.5.2 additions (screen-blur incident)
+
+1. Open a full-screen portrait photo, a video call and a social feed with many faces. With default settings the whole screen must NOT be covered; with strict mode on, expect heavy coverage and confirm the Stop notification and Quick Settings tile both stop it.
+2. Pull down the notification shade while a mask is shown: the mask must disappear while the shade is open and return afterwards.
+3. Force a long full-screen cover (strict mode on a full-screen portrait): protection must pause after 30 s and show the "paused" notification.
+4. Deny the notification permission: Start must still work and a toast must point to the Quick Settings tile.
+5. After any incident use **Copy log** in the app and attach the text.
+6. Check blur strength on a full-screen photo: shapes must not be recognizable.

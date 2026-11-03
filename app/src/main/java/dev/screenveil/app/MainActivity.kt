@@ -1,11 +1,17 @@
 package dev.screenveil.app
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,15 +58,30 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.screenveil.app.capture.ProtectionStatus
 import dev.screenveil.app.capture.ScreenProtectionAccessibilityService
+import dev.screenveil.app.diagnostics.DiagnosticLog
 import dev.screenveil.app.model.GemmaModelCatalog
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
 import dev.screenveil.app.model.SpecializedModelCatalog
+import dev.screenveil.app.model.TemporaryFrameFiles
 import dev.screenveil.app.policy.RedactionEffect
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var accessibilityEnabled by mutableStateOf(false)
+
+    // Android 13+ requires a runtime grant for the notification that carries the Stop button.
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                Toast.makeText(
+                    this,
+                    "Notifications are off, so there is no Stop button in the notification shade. Add the ScreenVeil tile to Quick Settings as your emergency Stop.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            startServiceProtection()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,6 +137,14 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        startServiceProtection()
+    }
+
+    private fun startServiceProtection() {
         AppPreferences(this).setProtectionEnabled(true)
         if (!ScreenProtectionAccessibilityService.requestStart()) {
             AppPreferences(this).setProtectionEnabled(false)
@@ -143,11 +172,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun removeAbandonedFrameFiles() {
-        cacheDir.listFiles()
-            ?.filter { it.isFile && (it.name.startsWith("screen-frame-") || it.name.startsWith("screenveil-frame-")) }
-            ?.forEach { runCatching { it.delete() } }
-    }
+    private fun removeAbandonedFrameFiles() = TemporaryFrameFiles.removeAbandoned(this)
 }
 
 @Composable
@@ -263,7 +288,7 @@ private fun ScreenVeilHome(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    "ScreenVeil requests screenshots of the active application window and reads only accessibility event metadata plus window IDs and bounds needed to place redaction masks. It does not inspect view nodes, read app text, tap controls, or perform gestures. Startup and technical failures never place a full-window cover; failures pause protection and clear the overlay.",
+                    "ScreenVeil requests screenshots of the active application window and reads only accessibility event metadata plus window IDs and bounds needed to place redaction masks. It does not inspect view nodes, read app text, tap controls, or perform gestures. Startup and technical failures never place a full-window cover; failures pause protection, clear the overlay and show a notification.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -370,9 +395,9 @@ private fun ScreenVeilHome(
                 if (selectedProfile == ModelProfile.FAST_SPECIALIZED || selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
                     Text(
                         if (selectedProfile == ModelProfile.BALANCED_SPECIALIZED) {
-                            "Scope limitation: this profile has one person detector and two general NSFW classifiers, but NO approved clothing/swimwear classifier. The ViT scans nine overlapping screen tiles only when no person is detected. Non-explicit person boxes remain UNCERTAIN and are redacted only while 'Redact uncertain content' is enabled (enabled by default). This is a conservative privacy trade-off, not semantic swimwear detection. It cannot guarantee every swimsuit, every image/video frame or every suggestive scene. Thresholds are uncalibrated and not Galaxy S24 FE benchmark results."
+                            "Scope limitation: this profile has one person detector and two general NSFW classifiers, but NO approved clothing/swimwear classifier. The ViT scans nine overlapping screen tiles only when no person is detected. People with a moderate NSFW score are covered as uncertain; low-scoring people are covered only in strict mode. This is not semantic swimwear detection. It cannot guarantee every swimsuit, every image/video frame or every suggestive scene. Thresholds are uncalibrated and not Galaxy S24 FE benchmark results."
                         } else {
-                            "Scope limitation: the fast profile has a person detector and Yahoo OpenNSFW only; it has NO approved clothing/swimwear classifier and no screen-tile fallback. Non-explicit person boxes remain UNCERTAIN and are redacted only while 'Redact uncertain content' is enabled (enabled by default). It cannot guarantee swimwear, images without a detected person, cartoons or all suggestive scenes."
+                            "Scope limitation: the fast profile has a person detector and Yahoo OpenNSFW only; it has NO approved clothing/swimwear classifier and no screen-tile fallback. People with a moderate NSFW score are covered as uncertain; low-scoring people are covered only in strict mode. It cannot guarantee swimwear, images without a detected person, cartoons or all suggestive scenes."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
@@ -420,6 +445,42 @@ private fun ScreenVeilHome(
                         onCheckedChange = { value -> settings = settings.copy(redactUncertain = value).also(preferences::saveSettings) }
                     )
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Cover every detected person (strict)", fontWeight = FontWeight.Medium)
+                        Text("Off by default. Specialist profiles cannot recognise swimwear, so this covers any person, including portraits, avatars and video calls. Expect many false positives.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = settings.redactAllPeople,
+                        onCheckedChange = { value -> settings = settings.copy(redactAllPeople = value).also(preferences::saveSettings) }
+                    )
+                }
+            }
+        }
+
+        SectionTitle("Emergency stop and diagnostics")
+        Card {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("If the screen is ever covered and you cannot use it: pull down the notification shade and tap Stop, or use the ScreenVeil Quick Settings tile (edit tiles, add ScreenVeil). Masks are lifted while the shade is open, and ScreenVeil pauses itself after 30 seconds of near-total coverage.", style = MaterialTheme.typography.bodySmall)
+                Text("The diagnostic log holds events and counts only (no screenshots, text or app names) and never leaves the device unless you copy it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val log = DiagnosticLog.read(context)
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("ScreenVeil diagnostics", log.ifBlank { "(empty)" }))
+                            Toast.makeText(context, "Diagnostic log copied", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Copy log") }
+                    OutlinedButton(
+                        onClick = {
+                            DiagnosticLog.clear(context)
+                            Toast.makeText(context, "Diagnostic log cleared", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Clear log") }
+                }
             }
         }
 
@@ -437,7 +498,7 @@ private fun ScreenVeilHome(
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text("• Screenshots are requested through Android AccessibilityService only after you explicitly enable ScreenVeil in Accessibility settings.")
-                Text("• No MediaProjection session, screen-recording dialog, foreground capture notification or Display over other apps permission is used.")
+                Text("• No MediaProjection session, screen-recording dialog or Display over other apps permission is used. A notification with a Stop button is shown while protection is on.")
                 Text("• Screen pixels are analyzed locally. No screenshots are uploaded or stored as a gallery; short-lived model input files are kept in private cache and deleted after inference.")
                 Text("• Internet access is used only when you explicitly download the models for the selected profile.")
                 Text("• Android may refuse screenshots of FLAG_SECURE or otherwise protected content. ScreenVeil does not bypass that restriction.")

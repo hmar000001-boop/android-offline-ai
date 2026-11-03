@@ -32,7 +32,8 @@ class AppPreferences(context: Context) {
         }.getOrDefault(RedactionEffect.GAUSSIAN_BLUR),
         intensity = prefs.getInt(KEY_INTENSITY, 18).coerceIn(4, 32),
         frameIntervalMs = prefs.getLong(KEY_INTERVAL, 1_500L).coerceIn(MIN_CAPTURE_INTERVAL_MS, 5_000L),
-        redactUncertain = prefs.getBoolean(KEY_UNCERTAIN, true)
+        redactUncertain = prefs.getBoolean(KEY_UNCERTAIN, true),
+        redactAllPeople = prefs.getBoolean(KEY_ALL_PEOPLE, false)
     )
 
     fun isProtectionEnabled(): Boolean = prefs.getBoolean(KEY_PROTECTION_ENABLED, false)
@@ -53,6 +54,7 @@ class AppPreferences(context: Context) {
             .putInt(KEY_INTENSITY, settings.intensity.coerceIn(4, 32))
             .putLong(KEY_INTERVAL, settings.frameIntervalMs.coerceIn(MIN_CAPTURE_INTERVAL_MS, 5_000L))
             .putBoolean(KEY_UNCERTAIN, settings.redactUncertain)
+            .putBoolean(KEY_ALL_PEOPLE, settings.redactAllPeople)
             .apply()
     }
 
@@ -61,6 +63,7 @@ class AppPreferences(context: Context) {
         private const val KEY_INTENSITY = "redaction_intensity"
         private const val KEY_INTERVAL = "frame_interval_ms"
         private const val KEY_UNCERTAIN = "redact_uncertain"
+        private const val KEY_ALL_PEOPLE = "redact_all_people"
         private const val KEY_PROTECTION_ENABLED = "protection_enabled"
         private const val KEY_MODEL_PROFILE = "model_profile"
         private const val KEY_SAFETY_MIGRATION_VERSION = "safety_migration_version"

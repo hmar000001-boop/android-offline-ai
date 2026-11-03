@@ -34,7 +34,9 @@ open class OverlayController(
     data class PreparedOverlay(
         val bitmap: Bitmap,
         val screenBounds: Rect,
-        val redactedRegions: Int
+        val redactedRegions: Int,
+        /** Share (0..1) of the window covered by the union of the rendered regions. */
+        val coverageFraction: Double = 0.0
     )
 
     private var imageView: ImageView? = null
@@ -53,7 +55,7 @@ open class OverlayController(
         require(width > 0 && height > 0) { "The captured application window has invalid bounds" }
 
         val selected = regions.filter {
-            ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain)
+            ModerationPolicy.shouldRedact(it.decision, settings.redactUncertain, settings.redactAllPeople)
         }
         if (selected.isEmpty()) return null
 
@@ -63,6 +65,7 @@ open class OverlayController(
         val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
         val coverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = OPAQUE_FALLBACK }
         var completed = 0
+        val coveredBoxes = ArrayList<dev.screenveil.app.model.NormalizedBox>()
 
         try {
             for (region in selected) {
@@ -119,6 +122,7 @@ open class OverlayController(
                     crop?.let { if (!it.isRecycled) it.recycle() }
                 }
                 completed++
+                coveredBoxes += region.box
             }
 
             if (completed == 0) {
@@ -126,7 +130,12 @@ open class OverlayController(
                 if (!composed.isRecycled) composed.recycle()
                 return null
             }
-            return PreparedOverlay(composed, Rect(screenBounds), completed)
+            return PreparedOverlay(
+                composed,
+                Rect(screenBounds),
+                completed,
+                dev.screenveil.app.policy.CoveragePolicy.unionFraction(coveredBoxes)
+            )
         } catch (error: Throwable) {
             if (!composed.isRecycled) composed.recycle()
             throw error

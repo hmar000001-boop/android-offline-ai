@@ -24,13 +24,16 @@ object ModelInstaller {
     private const val BUFFER_SIZE = 1024 * 1024
     private const val MAX_REDIRECTS = 5
     private const val REQUIRED_FREE_SPACE_MARGIN = 250_000_000L
-    private const val USER_AGENT = "ScreenVeil-Android/1.5.1"
+    private const val USER_AGENT = "ScreenVeil-Android/1.5.2"
 
+    // GitHub is limited to the exact hosts release downloads use. Wildcards remain only for
+    // Hugging Face's own CDN domains; user-content GitHub subdomains are not approved.
     private val approvedDownloadHosts = setOf(
         "storage.googleapis.com",
         "huggingface.co",
         "hf.co",
         "github.com",
+        "objects.githubusercontent.com",
         "release-assets.githubusercontent.com"
     )
 
@@ -243,15 +246,13 @@ object ModelInstaller {
         error("Too many redirects while downloading a model.")
     }
 
-    private fun isApprovedModelUrl(url: URL): Boolean {
+    internal fun isApprovedModelUrl(url: URL): Boolean {
         if (!url.protocol.equals("https", ignoreCase = true)) return false
         if (url.userInfo != null || (url.port != -1 && url.port != 443)) return false
         val host = url.host.lowercase().trimEnd('.')
         return host in approvedDownloadHosts ||
             host.endsWith(".huggingface.co") ||
-            host.endsWith(".hf.co") ||
-            host.endsWith(".github.com") ||
-            host.endsWith(".githubusercontent.com")
+            host.endsWith(".hf.co")
     }
 
     private fun Double.format(decimals: Int): String = "%1$.${decimals}f".format(this)
