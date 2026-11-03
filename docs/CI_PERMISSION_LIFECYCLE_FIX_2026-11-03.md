@@ -1,40 +1,44 @@
-# ScreenVeil R6 — instrumentation process-crash correction
+# ScreenVeil R6 — instrumentation permission preflight correction
 
 Date: 2026-11-03
 
-## Root cause identified from the source and CI sequence
+## What the latest CI output proves
 
-`ProtectionLifecycleInstrumentedTest.setUp()` granted `POST_NOTIFICATIONS` with `UiAutomation` when the permission was initially denied. Its `@After` then revoked that runtime permission to restore the original state.
+The latest CI run did **not** start AndroidJUnitRunner. The target and instrumentation APKs were installed, and the independent test ContentProvider returned a Bundle. The script then printed `Pre-granting POST_NOTIFICATIONS outside instrumentation...` and exited with code 255.
 
-Android's runtime-permission documentation states that when a runtime permission is revoked, processes running under the calling UID are killed. The app target and its instrumentation share the target application UID in this instrumentation configuration. Consequently, revoking `POST_NOTIFICATIONS` during `@After` can terminate the instrumentation process itself. This directly matches a run that completes one test and then reports `Instrumentation run failed due to Process crashed`.
+Inspection of the exact script showed the cause: it invoked `adb shell pm check-permission`. `check-permission` is not a `pm` subcommand. Android exposes this check through `dumpsys package check-permission <permission> <package> [<user>]`. That command prints the integer result from `PackageManager`: `0` means granted; `-1` means denied. The invalid `pm check-permission` invocation explains the exit 255 and means this CI run provides no new evidence about the instrumentation lifecycle tests.
 
-API 34's long-running job is consistent with the same teardown/process-termination race, although the supplied log excerpt does not include its final process exit record. The repeated emulator-console warning is not treated as the cause: the emulator had booted and Gradle had launched instrumentation.
+## Separate earlier hypothesis: runtime-permission mutation during tests
 
-## Changes
+An earlier version of `ProtectionLifecycleInstrumentedTest` granted `POST_NOTIFICATIONS` through `UiAutomation` in setup and revoked it in teardown. Android documents that revoking runtime permissions can kill processes associated with the affected UID. That was a credible explanation for the prior `Instrumentation run failed due to Process crashed` symptom, but it has **not yet been confirmed** by a successful run after removing in-process permission changes.
 
-1. Removed `UiAutomation.revokeRuntimePermission()` from test teardown.
-2. Removed the in-process `UiAutomation.grantRuntimePermission()` setup path.
-3. Added a strict setup assertion that `POST_NOTIFICATIONS` is already granted before each test.
-4. Updated `scripts/run-emulator-tests.sh` to grant `POST_NOTIFICATIONS` with `adb shell pm grant PACKAGE PERMISSION` and verify it with `adb shell pm check-permission PERMISSION PACKAGE --user 0` after the diagnostic script installs both APKs and before `connectedDebugAndroidTest` starts. The check command uses permission-first argument order; the grant command uses package-first argument order.
-5. The CI emulator is disposable, so the permission is deliberately not restored from inside instrumentation.
+The test now requires the permission to be granted before instrumentation begins and does not grant or revoke it itself. The CI emulator is disposable, so the host grants the permission once and leaves it granted until the emulator is discarded.
 
-No production application code, model, detector threshold, coverage limit, overlay rendering policy, or Gradle dependency was changed.
+## Changes in this correction
 
-## Validation performed in this environment
+1. Added `scripts/pregrant-notification-permission.sh`.
+2. Updated `scripts/run-emulator-tests.sh` to call the helper after the target/test APKs are installed and before `connectedDebugAndroidTest` starts.
+3. The helper grants explicitly for Android user 0 using `adb shell pm grant --user 0 PACKAGE PERMISSION`.
+4. It verifies using `adb shell dumpsys package check-permission PERMISSION PACKAGE 0` and accepts only result `0`.
+5. It captures and prints raw command output and exit status when the grant or verification fails, rather than hiding stderr or exiting without identifying which command failed.
 
-- Source inspection confirms no `grantRuntimePermission` or `revokeRuntimePermission` calls remain in the instrumentation test class.
-- Shell script syntax validation passed.
-- Android XML and GitHub Actions workflow YAML validation passed.
-- ZIP archive integrity and SHA-256 verification passed.
+No production application source, model, detector threshold, coverage limit, overlay rendering policy, or Gradle dependency was changed.
 
-A full Gradle build and emulator run were not available in this environment. The next API 34 and API 36 CI run is the required confirmation.
+## Validation performed for this archive
+
+- Shell syntax validation for every shell script: passed.
+- Host-side fake-ADB test of successful grant + verification: passed.
+- Host-side fake-ADB test that a denied result (`-1`) is rejected: passed.
+- Model catalog metadata validation for all five artifacts: passed. No model weights were downloaded by this check.
+- All 7 Android XML files parsed: passed.
+- GitHub Actions workflow YAML parsed: passed.
+- Instrumentation source scan confirms no `UiAutomation.grantRuntimePermission` or `UiAutomation.revokeRuntimePermission` calls remain in the lifecycle test.
+- ZIP integrity and SHA-256 are checked during packaging.
+
+A full Gradle build and Android API 34/API 36 emulator run were not available in this environment. The next CI run must first pass this permission preflight and then execute all 29 instrumentation tests. Only that run can confirm whether the earlier instrumentation-process crash is resolved and whether the explicit-Stop test has a separate failure.
 
 ## References
 
-- Android Open Source Project, Runtime permissions: https://source.android.com/docs/core/permissions/runtime_perms
-- Android `UiAutomation` API: https://developer.android.com/reference/android/app/UiAutomation
-
-
-## Follow-up packaging correction
-
-The first permission-fix archive accidentally passed the `pm check-permission` arguments in package-first order. This follow-up archive corrects the check to `android.permission.POST_NOTIFICATIONS dev.screenveil.app --user 0`. The grant command remains `dev.screenveil.app android.permission.POST_NOTIFICATIONS`, as required by `pm grant`.
+- Android Open Source Project, `PackageManagerService` source (documents `dumpsys package check-permission <permission> <package> [<user>]` and returns the PackageManager permission result): https://android.googlesource.com/platform/frameworks/base/+/3eef5a5/services/core/java/com/android/server/pm/PackageManagerService.java
+- Android Open Source Project, `PackageManagerShellCommand` source (documents `pm grant [--user USER_ID] PACKAGE PERMISSION`): https://android.googlesource.com/platform/frameworks/base/+/main/services/core/java/com/android/server/pm/PackageManagerShellCommand.java
+- Android runtime permissions: https://source.android.com/docs/core/permissions/runtime_perms

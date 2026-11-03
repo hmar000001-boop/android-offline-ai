@@ -28,19 +28,12 @@ set -e
 diagnostic_command_status="${diagnostic_status[0]:-1}"
 diagnostic_tee_status="${diagnostic_status[1]:-1}"
 
-# Install is performed by diagnose-instrumentation-runtime.sh. Grant POST_NOTIFICATIONS
-# from the host shell before AndroidJUnitRunner starts. Revoking a runtime permission from
-# UiAutomation in a test @After can kill every process under the target UID, which terminates
-# the instrumentation process and appears as "Instrumentation run failed due to Process crashed".
-# This emulator is disposable; do not revoke the permission inside the test process.
-echo "Pre-granting POST_NOTIFICATIONS outside instrumentation..."
-adb shell pm grant dev.screenveil.app android.permission.POST_NOTIFICATIONS
-notification_permission="$(adb shell pm check-permission android.permission.POST_NOTIFICATIONS dev.screenveil.app --user 0 2>/dev/null | tr -d '\r')"
-if [[ "$notification_permission" != "granted" ]]; then
-  echo "POST_NOTIFICATIONS pre-grant failed: permission status=$notification_permission" >&2
-  exit 1
-fi
-echo "POST_NOTIFICATIONS status: $notification_permission"
+# Install is performed by diagnose-instrumentation-runtime.sh. Grant and verify
+# POST_NOTIFICATIONS from the host shell before AndroidJUnitRunner starts. Revoking a
+# runtime permission from UiAutomation in test @After can kill the target/test UID and
+# terminate instrumentation. The emulator is disposable; do not revoke this permission
+# inside the test process.
+bash scripts/pregrant-notification-permission.sh dev.screenveil.app
 
 # Keep running the real suite even if a diagnostic command was unavailable or failed.
 # The provider probe is intentionally independent so its crash can be distinguished

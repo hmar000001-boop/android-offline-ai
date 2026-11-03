@@ -21,3 +21,8 @@ The Java fixture handles `onNewIntent()` and reapplies or clears `FLAG_SECURE` b
 ## Verification status
 
 Static source inspection and shell checks can validate the command shape and diagnostics, but they do not establish Android Activity Manager behavior. Gradle compilation, API 34/API 36 instrumentation runs, and real Galaxy S24 FE validation must still be confirmed by CI and device testing. No emulator test pass is claimed by this source revision.
+
+
+## 2026-11-03 permission-preflight correction
+
+A later CI run failed before instrumentation with exit code 255 immediately after `Pre-granting POST_NOTIFICATIONS outside instrumentation...`. The cause was the invalid command `pm check-permission`. The verification subcommand belongs to `dumpsys package`, and its output is numeric (`0` granted, `-1` denied). Use `scripts/pregrant-notification-permission.sh`, which grants with `pm grant --user 0` and verifies with `dumpsys package check-permission`. A run failing at this preflight has not executed instrumentation and therefore provides no new evidence about the lifecycle test crash.
