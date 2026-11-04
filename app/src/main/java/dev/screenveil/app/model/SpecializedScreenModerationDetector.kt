@@ -338,7 +338,9 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
     /**
      * Runs the approved 320x320 EfficientDet-Lite0 uint8 TensorFlow Hub TFLite artifact.
      * Its graph includes TFLite_Detection_PostProcess and returns four tensors:
-     * boxes [ymin,xmin,ymax,xmax], class IDs (COCO IDs offset by one), scores, then count.
+     * boxes [ymin,xmin,ymax,xmax], zero-based class IDs, scores, then count. The first
+     * model class index (0) is person. Boxes are normalized but may extend beyond [0,1];
+     * the decoder clips intersections to the frame. The COCO-evaluation +1 offset is not used.
      */
     private fun detectPeople(bitmap: Bitmap, model: LocalLiteRtCpuModel): List<RectF> {
         check(!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
@@ -368,27 +370,26 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
             val count = outputs[3][0].roundToInt().coerceIn(0, scores.size)
             val found = ArrayList<RectF>(minOf(count, MAX_PERSON_DETECTIONS))
             for (index in 0 until count) {
-                val classValue = classIds[index]
+                val classIndex = EfficientDetClassDecoder.validateRawClassIndex(classIds[index])
                 val score = scores[index]
-                require(classValue.isFinite() && classValue in 1f..90f &&
-                    abs(classValue - classValue.roundToInt()) < 0.01f
-                ) {
-                    "EfficientDet returned an invalid class index at detection $index"
-                }
                 require(score.isFinite() && score in 0f..1f) {
                     "EfficientDet returned an invalid confidence score at detection $index"
                 }
-                if (classValue.roundToInt() != PERSON_COCO_CLASS_INDEX || score < PERSON_SCORE_THRESHOLD) continue
+                if (classIndex != EfficientDetClassDecoder.PERSON_CLASS_INDEX ||
+                    score < PERSON_SCORE_THRESHOLD
+                ) continue
 
                 val offset = index * 4
-                val bounds = EfficientDetBoxDecoder.toPixelBounds(
+                val pixelBounds = EfficientDetBoxDecoder.toPixelBounds(
                     output = boxes,
                     offset = offset,
                     imageWidth = bitmap.width,
                     imageHeight = bitmap.height,
                     minimumSide = MIN_PERSON_CROP_SIDE
                 ) ?: continue
-                found += bounds
+                found += RectF(
+                    pixelBounds.left, pixelBounds.top, pixelBounds.right, pixelBounds.bottom
+                )
                 if (found.size >= MAX_PERSON_DETECTIONS) break
             }
             return found
@@ -414,6 +415,15 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
         ) {
             "EfficientDet returned an invalid detection count"
         }
+        val activeCount = count.roundToInt()
+        for (index in 0 until activeCount) {
+            val offset = index * 4
+            EfficientDetBoxDecoder.validateRawBox(outputs[0], offset)
+            EfficientDetClassDecoder.validateRawClassIndex(outputs[1][index])
+            require(outputs[2][index].isFinite() && outputs[2][index] in 0f..1f) {
+                "EfficientDet returned an invalid confidence score at detection $index"
+            }
+        }
     }
 
     override fun close() {
@@ -431,7 +441,6 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
 
     companion object {
         private const val PERSON_SCORE_THRESHOLD = 0.30f
-        private const val PERSON_COCO_CLASS_INDEX = 1
         private const val EFFICIENTDET_INPUT_SIZE = 320
         private const val EFFICIENTDET_MODEL_MAX_DETECTIONS = 25
         private const val MAX_PERSON_DETECTIONS = 40

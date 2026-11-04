@@ -1,4 +1,4 @@
-# ScreenVeil 1.6.5 (R9)
+# ScreenVeil 1.6.6 (R10)
 
 ScreenVeil is an experimental Android-wide, offline screen-content redaction application. After the user explicitly enables its Android `AccessibilityService` and taps **Start protection**, it captures the active application window with Android's `takeScreenshotOfWindow()` API, performs local model inference, and draws a non-focusable, non-touchable accessibility overlay over selected pixels. It does not use `MediaProjection` or `SYSTEM_ALERT_WINDOW`.
 
@@ -104,7 +104,13 @@ Pinned toolchain versions are in the Gradle settings/build files. Typical local 
 The GitHub Actions workflow builds a debug APK for testing and a separate R8 release APK. Release signing is conditional on repository signing secrets; without them the release artifact is unsigned. Emulator lifecycle tests run on API 34 and API 36. The manual `verify-model-pins` job downloads and verifies all five model artifacts, including the large optional Gemma file.
 
 R7 defines **58 unit tests** and **28 lifecycle instrumentation tests plus 2 real-model LiteRT runtime smoke tests and 1 deterministic EfficientDet box-order contract test (31 total)** in source. These are not claimed as passing until the R7 revision itself completes GitHub Actions. Instrumentation uses synthetic detector/segmenter outputs for deterministic lifecycle tests; it does not validate real model accuracy.
+R10 adds five local unit tests for EfficientDet raw-box clipping/validation and zero-based class-index validation, bringing the current source inventory to **64 unit test methods** and **31 instrumentation test methods**. The R10 real-model test requires an active detection and prints the exact raw coordinates if finiteness or ordering fails; it does not require every normalized coordinate to be clamped into [0,1]. These are source counts, not a claim that R10 CI has passed.
 
 ## Galaxy S24 FE validation is still required
 
 Before daily use, validate real model initialization, body mask alignment, false positives/misses, capture-to-overlay latency, memory, heat, battery, notification Stop, Quick Settings Stop, 5-minute auto-stop, coverage watchdog, screenshot timeout and inference timeout on the actual device. Follow [`docs/DEVICE_VALIDATION.md`](docs/DEVICE_VALIDATION.md). This source release is not a certification that those tests passed.
+
+
+## R10 EfficientDet output handling
+
+The raw TFLite detection output uses ordered `[ymin,xmin,ymax,xmax]` coordinates that are normalized to the 320×320 model input but may extend outside `[0,1]`. ScreenVeil validates finite, ordered coordinates, clips intersecting boxes to the visible screenshot, and discards boxes that do not intersect it. Raw class indices are zero-based; ScreenVeil compares index `0` directly with the model's first COCO label (`person`). The `+1` COCO category offset is for COCO evaluation only and is not applied in the Android app. The R10 instrumented test checks these contracts against the pinned model.

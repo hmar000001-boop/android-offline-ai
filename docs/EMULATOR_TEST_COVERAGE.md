@@ -7,7 +7,7 @@ The R7 instrumentation suite is configured for `connectedDebugAndroidTest` on An
 | Test | What it exercises |
 |---|---|
 | `rawTfliteDetectionPostProcessBoxOrderMapsYminXminYmaxXmaxCorrectly` | Deterministically checks raw TFLite `[ymin,xmin,ymax,xmax]` mapping to pixel bounds. |
-| `pinnedEfficientDetLite0RunsAndMatchesDetectionPostProcessContract` | Downloads/verifies the exact EfficientDet-Lite0 model, executes LiteRT standalone CPU inference and validates the raw four-output tensor contract, including one-based COCO class IDs. This is runtime plumbing, not person-detection accuracy. |
+| `pinnedEfficientDetLite0RunsAndMatchesDetectionPostProcessContract` | Downloads/verifies the exact EfficientDet-Lite0 model, executes LiteRT standalone CPU inference and validates the raw four-output tensor contract, including zero-based raw class IDs and the Android person-class index (0), without the COCO-evaluation offset. This is runtime plumbing, not person-detection accuracy. |
 | `accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly` | Parses Android flattened component names and rejects shell-quote characters. |
 | `cleanInstallDefaultsProtectionToOff` | Fresh install defaults to OFF. |
 | `previousReleaseOnFlagIsMigratedToOff` | Legacy persisted ON is migrated to OFF. |
@@ -73,3 +73,8 @@ The former Task Vision library was removed. EfficientDet-Lite0 and Selfie Multic
 ## R8 build-only dependency correction
 
 R8 adds a strict AndroidX Fragment `1.9.1` dependency so the resolved FragmentActivity implementation meets the Activity Result API compatibility requirement detected by Android lint. This does not change the instrumentation suite, model runtime, screenshot path or protection policy. CI records `dependencyInsight` output and fails unless `1.9.1` is selected. See `CI_LINT_FIX_FRAGMENT_ACTIVITY_RESULT_R8.md`.
+
+
+## R10 source inventory and stricter EfficientDet diagnostics
+
+R10 contains 64 local unit test methods (five new EfficientDet contract tests relative to R9) and 31 instrumentation methods. Its real EfficientDet test requires at least one active detection from the same neutral-grey smoke input that produced active detections in the prior R9 emulator run. It reports non-finite and inverted raw box values separately, including the offending tuple, and tests out-of-frame clipping. The Android app compares the raw zero-based person class index `0` directly; it does not apply the `+1` COCO evaluation offset. This strengthens output interpretation tests but still does not benchmark detector accuracy. The R10 API 34/API 36 instrumented jobs must run before these tests can be considered passing.

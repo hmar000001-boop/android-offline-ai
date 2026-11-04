@@ -69,20 +69,49 @@ class EfficientDetLiteRtInstrumentedTest {
             assertTrue("Detection count must be integral", abs(count - count.roundToInt()) < 0.01f)
             assertTrue("Detection count must fit the output capacity", count in 0f..capacity.toFloat())
             val actualCount = count.roundToInt()
+            // A previous R9 run on this pinned artifact and emulator produced active detections;
+            // keep the smoke test from passing vacuously without checking any active outputs.
+            assertTrue("Pinned EfficientDet smoke input produced no active detections", actualCount > 0)
+            assertEquals(
+                "The model's first zero-based class index is the COCO person label",
+                EfficientDetClassDecoder.PERSON_CLASS_INDEX,
+                EfficientDetClassDecoder.validateRawClassIndex(0f)
+            )
             for (index in 0 until actualCount) {
-                val classId = outputs[1][index]
+                val rawClassId = outputs[1][index]
                 val score = outputs[2][index]
-                assertTrue("Class IDs must be integral and within one-based COCO category ID range", classId.isFinite() &&
-                    classId in 1f..90f && abs(classId - classId.roundToInt()) < 0.01f)
-                assertTrue("Detection scores must be finite probabilities", score.isFinite() && score in 0f..1f)
+                assertTrue(
+                    "Raw TFLite class IDs must be integral and zero-based in 0..89; " +
+                        "detection=$index value=$rawClassId",
+                    rawClassId.isFinite() && rawClassId in 0f..89f &&
+                        abs(rawClassId - rawClassId.roundToInt()) < 0.01f
+                )
+                assertEquals(
+                    "Raw class index validation must preserve the model's zero-based index",
+                    rawClassId.roundToInt(),
+                    EfficientDetClassDecoder.validateRawClassIndex(rawClassId)
+                )
+                assertTrue(
+                    "Detection scores must be finite probabilities; detection=$index value=$score",
+                    score.isFinite() && score in 0f..1f
+                )
                 val offset = index * 4
-                val top = outputs[0][offset]
-                val left = outputs[0][offset + 1]
-                val bottom = outputs[0][offset + 2]
-                val right = outputs[0][offset + 3]
-                assertTrue("Raw TFLite boxes must be finite normalized ymin/xmin/ymax/xmax", listOf(
-                    top, left, bottom, right
-                ).all { it.isFinite() && it in 0f..1f } && top <= bottom && left <= right)
+                val rawBox = outputs[0].copyOfRange(offset, offset + 4)
+                assertTrue(
+                    "Raw TFLite box contains non-finite coordinate values; " +
+                        "detection=$index box=${rawBox.contentToString()}",
+                    rawBox.all { it.isFinite() }
+                )
+                assertTrue(
+                    "Raw TFLite box is inverted; expected [ymin,xmin,ymax,xmax]; " +
+                        "detection=$index box=${rawBox.contentToString()}",
+                    rawBox[0] <= rawBox[2] && rawBox[1] <= rawBox[3]
+                )
+                // A box may be partly or fully outside the frame. The production decoder must
+                // clip intersections and discard non-intersecting/degenerate boxes safely.
+                EfficientDetBoxDecoder.toPixelBounds(
+                    output = outputs[0], offset = offset, imageWidth = 320, imageHeight = 320, minimumSide = 1
+                )
             }
         } finally {
             runtime?.close()
