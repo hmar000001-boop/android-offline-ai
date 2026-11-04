@@ -28,7 +28,9 @@ import kotlin.math.pow
  * People are EXPLICIT (high score), UNCERTAIN (moderate score) or PERSON_LOW_RISK (low score, not a
  * clothing verdict). PERSON_LOW_RISK is covered only when the user turns on strict mode.
  */
-class SpecializedScreenModerationDetector(private val context: Context) : ScreenContentDetector {
+class SpecializedScreenModerationDetector(private val context: Context) : ScreenContentDetector, DiagnosticStageAware {
+    @Volatile
+    override var diagnosticStageObserver: ((stage: String, durationMs: Long, details: String?) -> Unit)? = null
     private var personDetector: ObjectDetector? = null
     private var nsfwSession: OrtSession? = null
     private var vitNsfwSession: OrtSession? = null
@@ -89,12 +91,14 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         val nsfw = checkNotNull(nsfwSession) { "OpenNSFW classifier is not initialized" }
         val vitNsfw = vitNsfwSession // Optional in the Fast profile; required by Balanced profile catalog.
         val env = checkNotNull(ortEnvironment) { "ONNX Runtime is not initialized" }
+        val diagnosticsEnabled = diagnosticStageObserver != null
 
         // Do not classify the entire screenshot as one redaction region. A high global NSFW
         // score cannot justify obscuring system/app chrome or unrelated content. Content is
         // evaluated per detected person or per bounded tile below.
-        val detections = peopleDetector.detect(TensorImage.fromBitmap(bitmap))
-            .mapNotNull { detection ->
+        val personDetectionStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
+        val detections = try {
+            peopleDetector.detect(TensorImage.fromBitmap(bitmap)).mapNotNull { detection ->
                 val category = detection.categories.maxByOrNull { it.score } ?: return@mapNotNull null
                 if (category.label != "person" || category.score < PERSON_SCORE_THRESHOLD) return@mapNotNull null
                 val box = detection.boundingBox
@@ -104,7 +108,21 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 val bottom = ceil(box.bottom.toDouble()).toInt().coerceIn(0, bitmap.height)
                 if (right - left < MIN_PERSON_CROP_SIDE || bottom - top < MIN_PERSON_CROP_SIDE) null
                 else RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
+            }.also { found ->
+                if (diagnosticsEnabled) recordDiagnosticStage(
+                    "Google EfficientDet-Lite0 person detection",
+                    android.os.SystemClock.elapsedRealtime() - personDetectionStartedAt,
+                    "personBoxes=${found.size}; screenshot=${bitmap.width}x${bitmap.height}"
+                )
             }
+        } catch (error: Throwable) {
+            if (diagnosticsEnabled) recordDiagnosticStage(
+                "Google EfficientDet-Lite0 person detection",
+                android.os.SystemClock.elapsedRealtime() - personDetectionStartedAt,
+                "FAILED ${error.javaClass.simpleName}"
+            )
+            throw error
+        }
 
         // Never silently drop people from a crowded screen: doing so could leave an unexamined
         // person visible while claiming that the frame was checked. Work is bounded to 24 crops;
@@ -119,12 +137,31 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         }
         val selectedDetections = detections
 
+        if (selectedDetections.isEmpty() && diagnosticsEnabled) {
+            recordDiagnosticStage(
+                "Yahoo OpenNSFW classification",
+                0L,
+                "SKIPPED: no person crops; OpenNSFW is evaluated per detected person"
+            )
+        }
         if (selectedDetections.isEmpty() && vitNsfw != null) {
-            val tiledRegions = scanScreenTilesWithVit(bitmap, vitNsfw, env)
+            val tiledRegions = withDiagnosticStage(
+                stage = "Marqo-derived ViT-Tiny screen tile scan",
+                details = { "grid=up to 3x3; flaggedTiles=${it.size}" }
+            ) {
+                scanScreenTilesWithVit(bitmap, vitNsfw, env)
+            }
             return DetectionResult(
                 regions = tiledRegions,
                 parseSucceeded = true,
                 diagnostic = "Balanced profile · no person boxes; ViT scanned up to $MAX_SCREEN_TILES overlapping screen tiles (${tiledRegions.size} flagged)"
+            )
+        }
+        if (selectedDetections.isEmpty() && vitNsfw == null && diagnosticsEnabled) {
+            recordDiagnosticStage(
+                "Marqo-derived ViT-Tiny screen tile scan",
+                0L,
+                "SKIPPED: this profile does not load the optional ViT model"
             )
         }
 
@@ -136,8 +173,21 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
             val height = bounds.height().toInt()
             val crop = Bitmap.createBitmap(bitmap, left, top, width, height)
             val decision = try {
-                val openNsfwScore = classifyOpenNsfw(crop, nsfw, env)
-                val vitNsfwScore = vitNsfw?.let { classifyVitNsfw(crop, it, env) } ?: 0f
+                val cropNumber = regions.size + 1
+                val openNsfwScore = withDiagnosticStage(
+                    stage = "Yahoo OpenNSFW classification",
+                    details = { "personCrop=$cropNumber" }
+                ) {
+                    classifyOpenNsfw(crop, nsfw, env)
+                }
+                val vitNsfwScore = if (vitNsfw != null) {
+                    withDiagnosticStage(
+                        stage = "Marqo-derived ViT-Tiny classification",
+                        details = { "personCrop=$cropNumber" }
+                    ) {
+                        classifyVitNsfw(crop, vitNsfw, env)
+                    }
+                } else 0f
                 val ensembleScore = max(openNsfwScore, vitNsfwScore)
                 when {
                     SpecialistDecisionPolicy.isNsfwFlagged(ensembleScore, PERSON_EXPLICIT_THRESHOLD) ->
@@ -175,6 +225,42 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
                 append(" Whole-screen scoring is disabled to prevent global redaction.")
             }
         )
+    }
+
+
+    /**
+     * Measures only when a one-shot trace is attached. Diagnostic callbacks are best-effort and
+     * must never change the classifier result or exception path.
+     */
+    private fun <T> withDiagnosticStage(
+        stage: String,
+        details: (T) -> String,
+        operation: () -> T
+    ): T {
+        if (diagnosticStageObserver == null) return operation()
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        val result = try {
+            operation()
+        } catch (error: Throwable) {
+            runCatching {
+                recordDiagnosticStage(
+                    stage,
+                    android.os.SystemClock.elapsedRealtime() - startedAt,
+                    "FAILED ${error.javaClass.simpleName}"
+                )
+            }
+            throw error
+        }
+        // Details formatting is also diagnostic work. A bug in it must never turn a successful
+        // inference into a classifier failure.
+        runCatching {
+            recordDiagnosticStage(
+                stage,
+                android.os.SystemClock.elapsedRealtime() - startedAt,
+                details(result)
+            )
+        }
+        return result
     }
 
     private fun classifyOpenNsfw(bitmap: Bitmap, session: OrtSession, env: OrtEnvironment): Float {

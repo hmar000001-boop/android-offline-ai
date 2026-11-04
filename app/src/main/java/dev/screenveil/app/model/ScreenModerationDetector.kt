@@ -21,6 +21,16 @@ import java.io.File
  * Runs one isolated image inspection per conversation so screen frames do not accumulate
  * conversational history. Engine and Conversation calls are confined to the owning worker thread.
  */
+/** Optional diagnostic timing hook. Implementations emit only stage names, durations and counts. */
+interface DiagnosticStageAware {
+    var diagnosticStageObserver: ((stage: String, durationMs: Long, details: String?) -> Unit)?
+
+    /** Diagnostics are best-effort and must never change the inference or safety path. */
+    fun recordDiagnosticStage(stage: String, durationMs: Long, details: String? = null) {
+        runCatching { diagnosticStageObserver?.invoke(stage, durationMs, details) }
+    }
+}
+
 interface ScreenContentDetector : AutoCloseable {
     val activeBackend: String
     fun initialize(modelFiles: ModelFiles)
@@ -28,7 +38,9 @@ interface ScreenContentDetector : AutoCloseable {
     override fun close()
 }
 
-class ScreenModerationDetector(private val context: Context) : ScreenContentDetector {
+class ScreenModerationDetector(private val context: Context) : ScreenContentDetector, DiagnosticStageAware {
+    @Volatile
+    override var diagnosticStageObserver: ((stage: String, durationMs: Long, details: String?) -> Unit)? = null
     private var engine: Engine? = null
     private var gemmaModelFile: File? = null
     override var activeBackend: String = "Not loaded"
@@ -84,18 +96,47 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
 
     override fun inspect(bitmap: Bitmap): DetectionResult {
         val currentEngine = checkNotNull(engine) { "Gemma is not initialized" }
+        val diagnosticsEnabled = diagnosticStageObserver != null
         val imageFile = File(context.cacheDir, "screenveil-frame-${System.nanoTime()}.jpg")
+        val preparationStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
         val imageForModel = resizedForVision(bitmap, MAX_IMAGE_SIDE)
         try {
-            imageFile.outputStream().buffered().use { output ->
-                check(imageForModel.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
-                    "Could not encode screen frame"
+            try {
+                imageFile.outputStream().buffered().use { output ->
+                    check(imageForModel.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
+                        "Could not encode screen frame"
+                    }
                 }
+            } catch (preparationError: Throwable) {
+                if (diagnosticsEnabled) recordDiagnosticStage(
+                    "Gemma image resize and JPEG preparation",
+                    android.os.SystemClock.elapsedRealtime() - preparationStartedAt,
+                    "FAILED ${preparationError.javaClass.simpleName}"
+                )
+                throw preparationError
             }
+            if (diagnosticsEnabled) recordDiagnosticStage(
+                "Gemma image resize and JPEG preparation",
+                android.os.SystemClock.elapsedRealtime() - preparationStartedAt,
+                "input=${bitmap.width}x${bitmap.height}; modelInput=${imageForModel.width}x${imageForModel.height}"
+            )
+            val inferenceStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
             return try {
-                sendImage(currentEngine, imageFile)
-            } catch (gpuError: Throwable) {
-                if (activeBackend != "GPU") throw gpuError
+                sendImage(currentEngine, imageFile).also {
+                    if (diagnosticsEnabled) recordDiagnosticStage(
+                        "Gemma 4 vision inference",
+                        android.os.SystemClock.elapsedRealtime() - inferenceStartedAt,
+                        "backend=$activeBackend; responseParsed=${it.parseSucceeded}; regions=${it.regions.size}"
+                    )
+                }
+            } catch (inferenceError: Throwable) {
+                val failedBackend = activeBackend
+                if (diagnosticsEnabled) recordDiagnosticStage(
+                    "Gemma $failedBackend vision inference",
+                    android.os.SystemClock.elapsedRealtime() - inferenceStartedAt,
+                    "FAILED ${inferenceError.javaClass.simpleName}"
+                )
+                if (failedBackend != "GPU") throw inferenceError
                 // A vendor GPU delegate can fail after initialization. Retry once on CPU.
                 runCatching { currentEngine.close() }
                 engine = null
@@ -107,17 +148,40 @@ class ScreenModerationDetector(private val context: Context) : ScreenContentDete
                         cacheDir = context.cacheDir.absolutePath
                     )
                 )
+                val fallbackInitializationStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
                 try {
                     fallback.initialize()
+                    if (diagnosticsEnabled) recordDiagnosticStage(
+                        "Gemma CPU fallback initialization",
+                        android.os.SystemClock.elapsedRealtime() - fallbackInitializationStartedAt,
+                        "SUCCESS"
+                    )
                 } catch (fallbackInitError: Throwable) {
+                    if (diagnosticsEnabled) recordDiagnosticStage(
+                        "Gemma CPU fallback initialization",
+                        android.os.SystemClock.elapsedRealtime() - fallbackInitializationStartedAt,
+                        "FAILED ${fallbackInitError.javaClass.simpleName}"
+                    )
                     runCatching { fallback.close() }
                     throw fallbackInitError
                 }
                 engine = fallback
                 activeBackend = "CPU (fallback)"
+                val fallbackStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
                 try {
-                    sendImage(fallback, imageFile)
+                    sendImage(fallback, imageFile).also {
+                        if (diagnosticsEnabled) recordDiagnosticStage(
+                            "Gemma 4 vision inference (CPU fallback)",
+                            android.os.SystemClock.elapsedRealtime() - fallbackStartedAt,
+                            "responseParsed=${it.parseSucceeded}; regions=${it.regions.size}"
+                        )
+                    }
                 } catch (fallbackError: Throwable) {
+                    if (diagnosticsEnabled) recordDiagnosticStage(
+                        "Gemma 4 vision inference (CPU fallback)",
+                        android.os.SystemClock.elapsedRealtime() - fallbackStartedAt,
+                        "FAILED ${fallbackError.javaClass.simpleName}"
+                    )
                     runCatching { fallback.close() }
                     engine = null
                     activeBackend = "Not loaded"

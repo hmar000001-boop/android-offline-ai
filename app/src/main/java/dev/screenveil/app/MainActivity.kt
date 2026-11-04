@@ -60,12 +60,15 @@ import dev.screenveil.app.capture.ProtectionStatus
 import dev.screenveil.app.capture.ProtectionNotifier
 import dev.screenveil.app.capture.ScreenProtectionAccessibilityService
 import dev.screenveil.app.diagnostics.DiagnosticLog
+import dev.screenveil.app.diagnostics.DeviceHealthMonitor
 import dev.screenveil.app.model.ModelInstaller
 import dev.screenveil.app.model.ModelProfile
 import dev.screenveil.app.model.SpecializedModelCatalog
 import dev.screenveil.app.model.TemporaryFrameFiles
 import dev.screenveil.app.policy.RedactionEffect
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var accessibilityEnabled by mutableStateOf(false)
@@ -198,6 +201,9 @@ private fun ScreenVeilHome(
     val context = LocalContext.current
     val preferences = remember { AppPreferences(context) }
     val protection by ProtectionStatus.state.collectAsState()
+    val deviceHealthSummary by DeviceHealthMonitor.summary.collectAsState()
+    val traceNextCycleArmed by DiagnosticLog.traceArmed.collectAsState()
+    LaunchedEffect(Unit) { DiagnosticLog.isNextDetectionCycleArmed(context) }
     val protectionHealthy = protection.active && protection.modelReady &&
         protection.error == null && !protection.opaqueCoverActive
     var selectedProfile by remember { mutableStateOf(preferences.getModelProfile()) }
@@ -469,24 +475,59 @@ private fun ScreenVeilHome(
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Safety test mode: each protection session ends automatically after 5 minutes. Keep the ScreenVeil Stop notification available and add the ScreenVeil Quick Settings tile before testing. If coverage exceeds the hard pixel-mask limits, segmentation fails, capture stalls or inference exceeds its deadline, protection stops and the overlay is cleared.", style = MaterialTheme.typography.bodySmall)
-                Text("The diagnostic log holds events and counts only (no screenshots, text or app names) and never leaves the device unless you copy it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Device health", fontWeight = FontWeight.SemiBold)
+                Text(deviceHealthSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Health is sampled every 15 seconds while protection is active. The main-thread delay is a lightweight responsiveness indicator. Android thermal information may be unavailable on some devices.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Divider()
+                Text("One-shot detection trace", fontWeight = FontWeight.SemiBold)
+                Text("Arm a detailed trace, then leave ScreenVeil and display the screen you want to inspect. The next actual screenshot cycle is recorded stage by stage. The diagnostic report contains timings and metadata only; it does not include screenshot pixels, on-screen text or foreground app names. The normal model pipeline may use transient in-memory frames and, for Gemma, a private-cache JPEG that is deleted after inference.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
                         onClick = {
-                            val log = DiagnosticLog.read(context)
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("ScreenVeil diagnostics", log.ifBlank { "(empty)" }))
-                            Toast.makeText(context, "Diagnostic log copied", Toast.LENGTH_SHORT).show()
+                            DiagnosticLog.armNextDetectionCycle(context)
+                            Toast.makeText(context, "Detailed trace armed for the next screenshot", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f)
-                    ) { Text("Copy log") }
+                    ) { Text(if (traceNextCycleArmed) "Trace armed" else "Trace next screenshot") }
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val report = withContext(Dispatchers.IO) { DiagnosticLog.readLastDetectionCycle(context) }
+                                withContext(Dispatchers.Main) {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("ScreenVeil last detection cycle", report.ifBlank { "No detailed cycle yet. Arm Trace next screenshot first." }))
+                                    Toast.makeText(context, "Last detection cycle copied", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Copy last cycle") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val eventLog = withContext(Dispatchers.IO) { DiagnosticLog.read(context, 22_000) }
+                                val lastCycle = withContext(Dispatchers.IO) { DiagnosticLog.readLastDetectionCycle(context) }
+                                val report = withContext(Dispatchers.Default) {
+                                    DeviceHealthMonitor.sessionReport(context, eventLog, lastCycle)
+                                }
+                                withContext(Dispatchers.Main) {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("ScreenVeil device and session report", report))
+                                    Toast.makeText(context, "Device and session report copied", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Copy session report") }
                     OutlinedButton(
                         onClick = {
                             DiagnosticLog.clear(context)
-                            Toast.makeText(context, "Diagnostic log cleared", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Diagnostics cleared", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f)
-                    ) { Text("Clear log") }
+                    ) { Text("Clear diagnostics") }
                 }
             }
         }

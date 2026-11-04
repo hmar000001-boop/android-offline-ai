@@ -35,7 +35,11 @@ open class OverlayController(
         val screenBounds: Rect,
         val redactedRegions: Int,
         /** Share (0..1) of the window covered by the union of the rendered regions. */
-        val coverageFraction: Double = 0.0
+        val coverageFraction: Double = 0.0,
+        /** Window-relative rectangles and final pixel-mask coverage, for explicit diagnostics only. */
+        val redactionBounds: List<Rect> = emptyList(),
+        val regionCoverageFractions: List<Double> = emptyList(),
+        val visiblePixelCount: Int = 0
     )
 
     private var imageView: ImageView? = null
@@ -47,7 +51,8 @@ open class OverlayController(
         frame: Bitmap,
         regions: List<DetectedMediaRegion>,
         settings: ModerationSettings,
-        screenBounds: Rect
+        screenBounds: Rect,
+        collectDiagnosticGeometry: Boolean = false
     ): PreparedOverlay? {
         if (frame.isRecycled || frame.width <= 0 || frame.height <= 0) return null
         val width = screenBounds.width()
@@ -67,6 +72,9 @@ open class OverlayController(
         val canvas = Canvas(composed)
         val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
         var completed = 0
+        // Geometry lists are diagnostic-only. Avoid allocating or retaining them on ordinary frames.
+        val redactionBounds = if (collectDiagnosticGeometry) ArrayList<Rect>(selected.size) else null
+        val regionCoverageFractions = if (collectDiagnosticGeometry) ArrayList<Double>(selected.size) else null
 
         try {
             for ((index, region) in selected.withIndex()) {
@@ -115,6 +123,8 @@ open class OverlayController(
                     val regionCoverage = BitmapRedactor.countVisiblePixels(rasterizedRegion).toDouble() /
                         (width.toDouble() * height.toDouble())
                     CoveragePolicy.requireRegionCoverage(regionCoverage)
+                    redactionBounds?.add(Rect(target.left, target.top, target.right, target.bottom))
+                    regionCoverageFractions?.add(regionCoverage)
                     canvas.drawBitmap(
                         rasterizedRegion,
                         null,
@@ -158,7 +168,10 @@ open class OverlayController(
                 composed,
                 Rect(screenBounds),
                 completed,
-                coverage
+                coverage,
+                redactionBounds ?: emptyList(),
+                regionCoverageFractions ?: emptyList(),
+                if (collectDiagnosticGeometry) visiblePixels else 0
             )
         } catch (error: Throwable) {
             if (!composed.isRecycled) composed.recycle()
