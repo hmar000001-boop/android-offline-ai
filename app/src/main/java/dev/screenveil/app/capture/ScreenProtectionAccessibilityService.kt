@@ -419,7 +419,7 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     val files = ModelFiles(verifiedFiles)
                     val created: ScreenContentDetector = injectedFactory?.invoke(this, profile) ?: when (profile) {
                         ModelProfile.GEMMA_VISION -> ScreenModerationDetector(this)
-                        ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector(this)
+                        ModelProfile.FAST_SPECIALIZED, ModelProfile.BALANCED_SPECIALIZED -> SpecializedScreenModerationDetector()
                         ModelProfile.SWIMWEAR_AWARE -> error("Swimwear-aware model has not passed Android artifact approval")
                     }
                     candidateForCleanup = created

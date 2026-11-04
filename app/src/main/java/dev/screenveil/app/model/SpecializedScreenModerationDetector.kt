@@ -1,6 +1,5 @@
 package dev.screenveil.app.model
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
@@ -28,7 +27,7 @@ import kotlin.math.pow
  * People are EXPLICIT (high score), UNCERTAIN (moderate score) or PERSON_LOW_RISK (low score, not a
  * clothing verdict). PERSON_LOW_RISK is covered only when the user turns on strict mode.
  */
-class SpecializedScreenModerationDetector(private val context: Context) : ScreenContentDetector, DiagnosticStageAware {
+class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticStageAware {
     @Volatile
     override var diagnosticStageObserver: ((stage: String, durationMs: Long, details: String?) -> Unit)? = null
     private var personDetector: ObjectDetector? = null
@@ -66,7 +65,13 @@ class SpecializedScreenModerationDetector(private val context: Context) : Screen
         try {
             nsfw = env.createSession(nsfwFile.absolutePath, options)
             if (vitNsfwFile != null) vitNsfw = env.createSession(vitNsfwFile.absolutePath, options)
-            person = ObjectDetector.createFromFileAndOptions(context, personFile.absolutePath, personOptions)
+            // This model lives in context.filesDir/models, not APK assets. The Context + String
+            // overload resolves its String through AssetManager.openFd(); use the File overload
+            // so Task Vision opens the verified private-filesystem artifact via a file descriptor.
+            check(personFile.isFile && personFile.canRead()) {
+                "EfficientDet-Lite0 model is not a readable file: ${personFile.name}"
+            }
+            person = ObjectDetector.createFromFileAndOptions(personFile, personOptions)
             ortEnvironment = env
             nsfwSession = nsfw
             vitNsfwSession = vitNsfw
