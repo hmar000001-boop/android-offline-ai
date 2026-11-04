@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -518,17 +519,35 @@ class ProtectionLifecycleInstrumentedTest {
         launchFixtureWindow()
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
-        val sessionStartRequestedAt = System.currentTimeMillis()
+
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
+        // requestStart() is intentionally asynchronous. Drain the service main queue, then read
+        // the timestamp recorded by armProtectionSessionTimeout(), not the caller's request time.
+        instrumentation.waitForIdleSync()
+        val originalSessionStart = sessionStartedAtElapsedMsForTest()
+        assertTrue("The service must arm the session watchdog before inference", originalSessionStart > 0L)
         await("localized overlay before short session deadline", timeoutMs = 20_000L) { hasRedactionWindow() }
         Thread.sleep(2_200L)
-        // Repeated Start requests must be idempotent and must not restart the maximum-session clock.
+
+        // Queue a duplicate Start, then drain that same Handler queue. The timestamp assertion
+        // proves directly that the duplicate request did not re-arm or extend the watchdog.
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
-        await("original session watchdog deadline to stop and clear the overlay", timeoutMs = 3_500L) {
+        instrumentation.waitForIdleSync()
+        val afterRepeatedStart = sessionStartedAtElapsedMsForTest()
+        assertEquals(
+            "Repeated Start must leave the original service-owned session deadline unchanged",
+            originalSessionStart,
+            afterRepeatedStart
+        )
+
+        await("original session watchdog deadline to stop and clear the overlay", timeoutMs = 8_000L) {
             !ProtectionStatus.state.value.active && !hasRedactionWindow()
         }
-        val elapsed = System.currentTimeMillis() - sessionStartRequestedAt
-        assertTrue("Repeated Start extended the session deadline: elapsed=${elapsed}ms", elapsed < 5_500L)
+        val elapsedFromActualArm = SystemClock.elapsedRealtime() - originalSessionStart
+        assertTrue(
+            "The session watchdog stopped before its configured 5-second deadline: elapsed=${elapsedFromActualArm}ms",
+            elapsedFromActualArm >= 5_000L
+        )
         assertFalse(AppPreferences(context).isProtectionEnabled())
     }
 
@@ -1203,6 +1222,14 @@ class ProtectionLifecycleInstrumentedTest {
         } finally {
             uiAutomation.dropShellPermissionIdentity()
         }
+    }
+
+    private fun sessionStartedAtElapsedMsForTest(): Long {
+        var value = 0L
+        instrumentation.runOnMainSync {
+            value = ScreenProtectionAccessibilityService.sessionStartedAtElapsedMsForTest()
+        }
+        return value
     }
 
     private fun isSameComponent(value: String, expected: ComponentName): Boolean {

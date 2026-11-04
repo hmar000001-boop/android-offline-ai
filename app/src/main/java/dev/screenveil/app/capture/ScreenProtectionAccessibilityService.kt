@@ -1596,6 +1596,15 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             return true
         }
 
+        /**
+         * Debug instrumentation only: exposes the actual monotonic timestamp at which the
+         * current protection-session watchdog was armed. Tests read it on the main thread after
+         * draining the queued Start request; this avoids using the caller's pre-dispatch wall-clock
+         * timestamp as a proxy for the service-owned session deadline.
+         */
+        internal fun sessionStartedAtElapsedMsForTest(): Long =
+            if (BuildConfig.DEBUG) currentInstance?.protectionSessionStartedAtMs ?: 0L else 0L
+
         /** Reports whether Android has actually bound the service, not merely enabled its setting. */
         fun isServiceConnected(): Boolean = currentInstance?.let { it.connected && !it.destroyed } == true
 

@@ -56,3 +56,8 @@ The subsequent GitHub Actions run reached `:app:compileDebugKotlin` and reported
 - Current approved detectors are general NSFW/person detectors. There is no validated swimwear-specific classifier.
 - The new segmentation model's real accuracy, latency and thermal behavior on Galaxy S24 FE are unknown until physical-device testing.
 - A green emulator suite validates tested lifecycle and segmentation runtime plumbing, not moderation accuracy or complete protection of every image/video frame.
+
+
+## R11 follow-up — deterministic session-watchdog test
+
+See `docs/API36_WATCHDOG_TEST_CLOCK_FIX_R11.md`. Only a debug-only read accessor and the lifecycle instrumentation test changed; production timeout scheduling and safety policy remain unchanged.
