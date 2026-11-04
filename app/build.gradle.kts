@@ -22,8 +22,8 @@ android {
         applicationId = "dev.screenveil.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.6.2"
+        versionCode = 16
+        versionName = "1.6.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -85,6 +85,13 @@ dependencies {
     }
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.12.4")
+    // Activity Result APIs are used by MainActivity. Keep Fragment explicitly current because
+    // some transitive AndroidX dependencies can otherwise select a pre-1.3 FragmentActivity
+    // implementation, which is incompatible with Activity Result permission callbacks.
+    implementation("androidx.fragment:fragment:1.9.1") {
+        version { strictly("1.9.1") }
+        because("Activity Result APIs require Fragment 1.3.0 or newer when FragmentActivity is present")
+    }
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
 

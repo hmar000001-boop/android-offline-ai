@@ -1,6 +1,8 @@
-# ScreenVeil 1.6.2 (R7)
+# ScreenVeil 1.6.3 (R8)
 
 ScreenVeil is an experimental Android-wide, offline screen-content redaction application. After the user explicitly enables its Android `AccessibilityService` and taps **Start protection**, it captures the active application window with Android's `takeScreenshotOfWindow()` API, performs local model inference, and draws a non-focusable, non-touchable accessibility overlay over selected pixels. It does not use `MediaProjection` or `SYSTEM_ALERT_WINDOW`.
+
+**R8 build correction:** AndroidX Fragment is strictly pinned to `1.9.1` to satisfy Activity Result API compatibility when older FragmentActivity versions are present transitively. See [`docs/CI_LINT_FIX_FRAGMENT_ACTIVITY_RESULT_R8.md`](docs/CI_LINT_FIX_FRAGMENT_ACTIVITY_RESULT_R8.md). No lint rule is suppressed.
 
 **This is experimental software, not a certified safety product.** Model accuracy, segmentation quality, latency, battery and thermal behavior have not yet been validated on the Samsung Galaxy S24 FE. Do not treat it as a high-assurance child-safety control or assume it catches every explicit image, swimsuit, video frame or application layout.
 

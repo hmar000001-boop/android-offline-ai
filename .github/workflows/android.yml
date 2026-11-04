@@ -46,6 +46,18 @@ jobs:
         with:
           gradle-version: '8.14.6'
 
+      - name: Check pinned Activity Result Fragment dependency
+        run: bash scripts/verify-fragment-activity-result-dependency.sh
+
+      - name: Verify Activity Result Fragment dependency resolution
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon :app:dependencyInsight \
+            --dependency androidx.fragment:fragment \
+            --configuration debugRuntimeClasspath 2>&1 | tee fragment-dependency.log
+          grep -Eq 'androidx\.fragment:fragment:1\.9\.1([[:space:]]|$)' fragment-dependency.log
+
       - name: Verify source and build debug APK
         shell: bash
         run: |
@@ -75,6 +87,7 @@ jobs:
             build/reports/problems/problems-report.html
             app/build/reports/problems/problems-report.html
             build-output.log
+            fragment-dependency.log
           if-no-files-found: ignore
           retention-days: 14
 

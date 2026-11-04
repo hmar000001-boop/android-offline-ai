@@ -1,4 +1,4 @@
-# Emulator test coverage — ScreenVeil 1.6.2 (R7)
+# Emulator test coverage — ScreenVeil 1.6.3 (R8)
 
 The R7 instrumentation suite is configured for `connectedDebugAndroidTest` on Android API 34 and API 36. The suite downloads the exact pinned EfficientDet and segmentation models needed by its two real-runtime smoke tests; detector and lifecycle cases inject deterministic outputs. A debug-only test seam provides synthetic detector, screenshot and segmentation implementations for those deterministic tests. The Android AccessibilityService, watchdog scheduling, screenshot flow, inference worker, real `OverlayController`/`WindowManager` and service lifecycle remain active where each test requires them.
 
@@ -68,3 +68,8 @@ independently observed teardown are synchronous.
 ## R7 runtime migration gate
 
 The former Task Vision library was removed. EfficientDet-Lite0 and Selfie Multiclass now use the LiteRT `2.3.2` standalone CPU `Interpreter` compatibility adapter. Two real-model plumbing tests now exercise the exact pinned models on API 34 and API 36; neither claims classification accuracy. API 36 emulator success is not a substitute for the Galaxy S24 FE ARM64 test. CI also checks 16 KB ELF/ZIP alignment of packaged 64-bit native libraries.
+
+
+## R8 build-only dependency correction
+
+R8 adds a strict AndroidX Fragment `1.9.1` dependency so the resolved FragmentActivity implementation meets the Activity Result API compatibility requirement detected by Android lint. This does not change the instrumentation suite, model runtime, screenshot path or protection policy. CI records `dependencyInsight` output and fails unless `1.9.1` is selected. See `CI_LINT_FIX_FRAGMENT_ACTIVITY_RESULT_R8.md`.

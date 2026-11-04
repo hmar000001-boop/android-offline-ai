@@ -14,9 +14,12 @@ Pinned versions:
 | Compose BOM | 2025.12.00 | Compose 1.10 generation; does not require API 37 / AGP 9 |
 | AndroidX Core | 1.17.0 | Core 1.18 raised its compile SDK requirement to API 36.1; Core 1.19 requires newer tooling |
 | Activity Compose | 1.12.4 | Stable Activity release before the later API/tooling line |
+| AndroidX Fragment | 1.9.1 | Explicitly overrides older transitive FragmentActivity implementations for Activity Result API compatibility |
 | Lifecycle | 2.9.4 | Stable Lifecycle release on the API-36-compatible line |
 
 The Compose BOM is imported with `enforcedPlatform`, and Core/Core-KTX have strict dependency constraints. This makes dependency resolution fail rather than silently selecting a newer Compose or Core artifact that requires API 37.
+
+AndroidX Fragment is explicitly and strictly pinned to `1.9.1`. `MainActivity` uses `registerForActivityResult()` for the required notification permission. Older transitive FragmentActivity implementations are incompatible with this Activity Result callback path; the AndroidX lint rule `InvalidFragmentVersionForActivityResult` therefore remains enabled and must pass. CI runs `dependencyInsight` and asserts that `1.9.1` is the selected runtime version.
 
 Do not update Compose BOM to 2026.09.00 while this toolchain remains unchanged: it resolves Compose 1.12.1, whose AAR metadata requires compile SDK 37 and AGP 9.1+. Do not update AndroidX Core to 1.19.1: its AAR metadata also requires the newer Android toolchain.
 
@@ -39,7 +42,7 @@ The corresponding Compose `weight` API is scoped to `RowScope`/`ColumnScope`; th
 
 The capture implementation requires Android API 34 / Android 14 because it uses `AccessibilityService.takeScreenshotOfWindow(int, Executor, TakeScreenshotCallback)`. The manifest sets `minSdk = 34`; CI still compiles against API 36. `canTakeScreenshot=true` must remain in `res/xml/accessibility_service_config.xml`, and `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` must be enabled to obtain the active application window ID and bounds. Do not replace this with a MediaProjection flow without an explicit product decision.
 
-## Local model runtime dependencies (ScreenVeil 1.6.2 / R7)
+## Local model runtime dependencies (ScreenVeil 1.6.3 / R8)
 
 - ONNX Runtime Android `1.31.1` runs the two specialist ONNX classifiers.
 - Google AI Edge LiteRT Android `2.3.2` runs EfficientDet-Lite0 and Selfie Multiclass through the bundled CPU-only LiteRT Interpreter compatibility API. Both models are mapped from their already-verified private files; no Task Vision JNI library or MediaPipe Tasks usage-metrics path is included.

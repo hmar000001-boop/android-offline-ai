@@ -1,17 +1,17 @@
-# Physical-device validation plan — Samsung Galaxy S24 FE (R7)
+# Physical-device validation plan — Samsung Galaxy S24 FE (R8)
 
 This plan is mandatory before considering ScreenVeil suitable for ordinary use. CI can establish source compilation, unit tests and synthetic lifecycle behavior. Only the physical Galaxy S24 FE can establish real segmentation/model compatibility, actual overlay alignment, One UI behavior, latency, memory, battery and thermal stability.
 
 ## Gate 0 — CI and model artifact integrity
 
-1. Run the R7 GitHub Actions workflow on the intended branch.
+1. Run the R8 GitHub Actions workflow on the intended branch.
 2. Require green `build`, `release-build` (including 16 KB ELF/ZIP alignment checks), and `emulator-lifecycle` API 34 and API 36 jobs.
 3. Manually run `verify-model-pins` using `workflow_dispatch`. It verifies all five catalog artifacts, including the optional large Gemma model; confirm both EfficientDet and Selfie Multiclass artifacts pass the pinned SHA-256 and size bounds.
 4. The debug APK is the controlled test artifact. The R8 release APK is unsigned unless the repository signing secrets are configured. Do not install an unsigned release APK.
 
 ## Gate 1 — install and emergency exits
 
-1. Install the R7 debug APK. If Android reports a signature conflict with an earlier debug installation, remove the older app first; this may also remove locally downloaded model files.
+1. Install the R8 debug APK. If Android reports a signature conflict with an earlier debug installation, remove the older app first; this may also remove locally downloaded model files.
 2. Open ScreenVeil. Confirm no MediaProjection/screen-recording permission flow and no Display over other apps permission request.
 3. Grant notification permission. Disable/re-enable ScreenVeil notification channel once to verify that Start is refused while the Stop notification cannot be shown.
 4. Add ScreenVeil's Quick Settings tile manually. Confirm it is labelled as a stop action; when protection is OFF, tapping it must open the app and must not start protection.
