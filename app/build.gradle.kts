@@ -22,8 +22,8 @@ android {
         applicationId = "dev.screenveil.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.6.0"
+        versionCode = 15
+        versionName = "1.6.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -101,7 +101,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
-    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    // Bundled, offline LiteRT runtime. Do not use MediaPipe Tasks here: this app permits
+    // network access only for explicit model downloads, not task-usage telemetry.
+    implementation("com.google.ai.edge.litert:litert:2.3.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")

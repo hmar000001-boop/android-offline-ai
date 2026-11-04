@@ -5,9 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.task.vision.segmenter.ImageSegmenter
-import org.tensorflow.lite.task.vision.segmenter.OutputType
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -159,19 +156,33 @@ class BodySegmentationMask private constructor(
     }
 }
 
-/** Google MediaPipe SelfieMulticlass 256x256, executed locally through TFLite Task Vision. */
+/** Google Selfie Multiclass 256x256, executed locally through LiteRT Interpreter. */
 class TfliteHumanBodySegmenter : HumanBodySegmenter {
-    private companion object { const val MODEL_INPUT_SIZE = 256 }
-    private var segmenter: ImageSegmenter? = null
+    private companion object {
+        const val MODEL_INPUT_SIZE = 256
+        const val OUTPUT_CLASSES = 6
+    }
+    private var segmenter: LocalLiteRtCpuModel? = null
 
     override fun initialize(context: Context, modelFiles: ModelFiles) {
         check(segmenter == null) { "Human segmenter is already initialized" }
         val file: File = modelFiles.require(ModelIds.BODY_SEGMENTER)
-        val options = ImageSegmenter.ImageSegmenterOptions.builder()
-            .setOutputType(OutputType.CATEGORY_MASK)
-            .setNumThreads(2)
-            .build()
-        segmenter = ImageSegmenter.createFromFileAndOptions(file, options)
+        val loaded = LocalLiteRtCpuModel(
+            modelFile = file,
+            expectedInputShape = intArrayOf(1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3),
+            expectedOutputShapes = listOf(intArrayOf(1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, OUTPUT_CLASSES))
+        )
+        try {
+            // Warm up with a fully padded black frame (RGB normalized to [-1, 1]).
+            val output = loaded.runFloat(FloatArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * 3) { -1f })
+            check(output.single().size == MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * OUTPUT_CLASSES) {
+                "Unexpected Selfie Multiclass output size: ${output.single().size}"
+            }
+            segmenter = loaded
+        } catch (error: Throwable) {
+            loaded.close()
+            throw error
+        }
     }
 
     override fun segment(frame: Bitmap): BodySegmentationMask {
@@ -198,19 +209,47 @@ class TfliteHumanBodySegmenter : HumanBodySegmenter {
                     Paint(Paint.FILTER_BITMAP_FLAG)
                 )
             }
-            val results = active.segment(TensorImage.fromBitmap(modelInput))
-            check(results.size == 1) { "Expected one selfie segmentation mask, got ${results.size}" }
-            val categoryMask = results.single().masks.singleOrNull()
-                ?: error("Selfie segmentation did not return exactly one category mask")
-            check(categoryMask.width == inputSize && categoryMask.height == inputSize) {
-                "Unexpected category mask dimensions ${categoryMask.width}x${categoryMask.height}; expected ${inputSize}x${inputSize}"
+            val pixels = IntArray(inputSize * inputSize)
+            modelInput.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+            val input = FloatArray(pixels.size * 3)
+            for (index in pixels.indices) {
+                val pixel = pixels[index]
+                val offset = index * 3
+                // The pinned Google Selfie Multiclass metadata specifies RGB8 / 127.5 - 1.
+                input[offset] = ((pixel ushr 16 and 0xff) / 127.5f) - 1f
+                input[offset + 1] = ((pixel ushr 8 and 0xff) / 127.5f) - 1f
+                input[offset + 2] = ((pixel and 0xff) / 127.5f) - 1f
             }
+            val outputs = active.runFloat(input)
+            check(outputs.size == 1) { "Expected one selfie segmentation output, got ${outputs.size}" }
+            val probabilities = outputs.single()
+            val expectedElements = inputSize * inputSize * OUTPUT_CLASSES
+            check(probabilities.size == expectedElements) {
+                "Unexpected segmentation output element count ${probabilities.size}; expected $expectedElements"
+            }
+            val categoryBuffer = ByteBuffer.allocate(inputSize * inputSize)
+            for (pixelIndex in 0 until inputSize * inputSize) {
+                val base = pixelIndex * OUTPUT_CLASSES
+                var bestCategory = 0
+                var bestScore = probabilities[base]
+                check(bestScore.isFinite()) { "Selfie segmentation returned a non-finite class score" }
+                for (category in 1 until OUTPUT_CLASSES) {
+                    val score = probabilities[base + category]
+                    check(score.isFinite()) { "Selfie segmentation returned a non-finite class score" }
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestCategory = category
+                    }
+                }
+                categoryBuffer.put(bestCategory.toByte())
+            }
+            categoryBuffer.rewind()
             return BodySegmentationMask.fromCategoryMask(
-                width = categoryMask.width,
-                height = categoryMask.height,
+                width = inputSize,
+                height = inputSize,
                 frameWidth = frame.width,
                 frameHeight = frame.height,
-                categoryBuffer = categoryMask.buffer,
+                categoryBuffer = categoryBuffer,
                 dilationRadius = 2,
                 contentLeft = contentLeft,
                 contentTop = contentTop,

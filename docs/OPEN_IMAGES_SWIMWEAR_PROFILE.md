@@ -24,7 +24,7 @@ An older Android conversion example for the OIDv4 SSD model documents the interm
 2. Export the pretrained weights to a 300x300 SSD TFLite graph. Do not train, fine-tune or modify learned weights.
 3. Keep the expected SSD detection output contract (`boxes`, `classes`, `scores`, `count`) and determine the actual input tensor type/normalization from the exported graph. Do not assume it from a generic SSD example.
 4. Extract the Open Images label map from the same pinned source revision. Verify the exact class names used at runtime, especially `Person` and `Swimwear`; do not hardcode a numeric class index without testing the label map.
-5. Either attach valid TFLite ObjectDetector metadata and prove compatibility with `tensorflow-lite-task-vision`, or write a dedicated Interpreter adapter that validates all tensor shapes, types and output ordering.
+5. Either attach valid TFLite ObjectDetector metadata and prove compatibility with the pinned LiteRT runtime, or write a dedicated LiteRT adapter that validates all tensor shapes, types and output ordering.
 6. Compare SavedModel and TFLite detections on a fixed fixture set. Measure class-specific Swimwear precision/recall and box IoU, along with Person recall. Include swimwear types, modest swimwear, sports swimwear, pool backgrounds, beach clothing and non-swimwear controls.
 7. Verify local inference with all network connectivity disabled after model installation. Record APK/device/runtime versions, P50/P95 latency, peak memory and thermal behavior on Galaxy S24 FE.
 8. Only after these gates pass, record the exact exported TFLite SHA-256 and byte-size bounds in `SpecializedModelCatalog`, add it to the download allow-list, implement the separate detector adapter, and enable the profile.

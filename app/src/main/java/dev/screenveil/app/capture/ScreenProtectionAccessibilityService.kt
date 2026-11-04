@@ -482,8 +482,12 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     loadedProfile = null
                     modelReady = false
                     modelInitializationStarted.set(false)
-                    val detail = error.message ?: error.javaClass.simpleName
-                    DiagnosticLog.record(this, "MODEL_INITIALIZATION_FAILED profile=${profile.name} type=${error.javaClass.simpleName}")
+                    val detail = describeModelInitializationFailure(error)
+                    DiagnosticLog.record(
+                        this,
+                        "MODEL_INITIALIZATION_FAILED profile=${profile.name} " +
+                            "type=${error.javaClass.simpleName} causeChain=$detail"
+                    )
                     mainHandler.post {
                         if (!destroyed && monitoringRequested) {
                             stopForSafety("Protection paused because ${profile.title} could not be loaded. The screen is visible.", detail)
@@ -495,6 +499,23 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
             modelInitializationStarted.set(false)
             stopForSafety("Protection paused because the ${profile.title} worker could not start. The screen is visible.", "Inference worker rejected model initialization")
         }
+    }
+
+    /** Keeps native/model initialization failures actionable without logging screen or app content. */
+    private fun describeModelInitializationFailure(error: Throwable): String {
+        val parts = ArrayList<String>(5)
+        val seen = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<Throwable, Boolean>()
+        )
+        var current: Throwable? = error
+        while (current != null && parts.size < 5 && seen.add(current)) {
+            val message = (current.message ?: "").replace(Regex("/data/(?:user/0|data)/[^\\s:]+"), "<app-private-path>")
+                .replace('\n', ' ').replace('\r', ' ').take(180)
+            parts += if (message.isBlank()) current.javaClass.simpleName
+                else "${current.javaClass.simpleName}: $message"
+            current = current.cause
+        }
+        return parts.joinToString(" <- ").ifBlank { error.javaClass.simpleName }
     }
 
     private fun armProtectionSessionTimeout() {

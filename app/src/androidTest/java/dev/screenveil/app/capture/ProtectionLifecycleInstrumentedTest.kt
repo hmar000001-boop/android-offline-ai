@@ -1237,7 +1237,7 @@ class ProtectionLifecycleInstrumentedTest {
             settings: ModerationSettings,
             screenBounds: Rect,
             collectDiagnosticGeometry: Boolean
-        ): OverlayController.PreparedOverlay = OverlayController.PreparedOverlay(
+        ): OverlayController.PreparedOverlay? = OverlayController.PreparedOverlay(
             bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888),
             screenBounds = Rect(screenBounds),
             redactedRegions = regions.size

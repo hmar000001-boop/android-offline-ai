@@ -52,6 +52,9 @@ jobs:
           set -o pipefail
           gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug --stacktrace 2>&1 | tee build-output.log
 
+      - name: Verify 16 KB native-library alignment in debug APK
+        run: bash scripts/verify-16k-native-libs.sh app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -130,6 +133,16 @@ jobs:
         run: |
           set -o pipefail
           gradle --no-daemon assembleRelease --stacktrace 2>&1 | tee release-build.log
+
+      - name: Verify 16 KB native-library alignment in release APK
+        shell: bash
+        run: |
+          release_apk="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [[ -z "$release_apk" ]]; then
+            echo 'ERROR: release APK was not produced.' >&2
+            exit 1
+          fi
+          bash scripts/verify-16k-native-libs.sh "$release_apk"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4

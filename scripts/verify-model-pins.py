@@ -3,7 +3,7 @@
 
 Default: validate every catalog entry's HTTPS host, SHA-256 syntax and size bounds.
 --download: stream each selected artifact and compare its actual SHA-256 and byte size.
---only ID: limit the operation to a single exact model id.
+--only ID: limit the operation to one exact model id; repeat to select multiple models.
 --output-dir DIR: after successful download verification, atomically save the artifact there.
 """
 import argparse
@@ -92,7 +92,7 @@ def download_and_verify(item, output_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--download", action="store_true", help="download and verify selected model artifacts")
-    parser.add_argument("--only", metavar="MODEL_ID", help="verify only one exact catalog model id")
+    parser.add_argument("--only", metavar="MODEL_ID", action="append", help="verify only this exact catalog model id (repeatable)")
     parser.add_argument("--output-dir", type=Path, help="save successfully verified downloads in this directory")
     args = parser.parse_args()
     if args.output_dir is not None and not args.download:
@@ -102,9 +102,12 @@ def main():
     if len(artifacts) < 5:
         sys.exit(f"Expected at least 5 catalog entries, parsed {len(artifacts)}")
     if args.only:
-        artifacts = [item for item in artifacts if item["id"] == args.only]
-        if not artifacts:
-            sys.exit(f"Model id not found in catalog: {args.only}")
+        selected_ids = set(args.only)
+        known_ids = {item["id"] for item in artifacts}
+        unknown_ids = selected_ids - known_ids
+        if unknown_ids:
+            sys.exit("Model id(s) not found in catalog: " + ", ".join(sorted(unknown_ids)))
+        artifacts = [item for item in artifacts if item["id"] in selected_ids]
 
     failures = 0
     for item in artifacts:

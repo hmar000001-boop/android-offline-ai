@@ -1,10 +1,10 @@
-# ScreenVeil 1.6.0 (R6)
+# ScreenVeil 1.6.2 (R7)
 
 ScreenVeil is an experimental Android-wide, offline screen-content redaction application. After the user explicitly enables its Android `AccessibilityService` and taps **Start protection**, it captures the active application window with Android's `takeScreenshotOfWindow()` API, performs local model inference, and draws a non-focusable, non-touchable accessibility overlay over selected pixels. It does not use `MediaProjection` or `SYSTEM_ALERT_WINDOW`.
 
 **This is experimental software, not a certified safety product.** Model accuracy, segmentation quality, latency, battery and thermal behavior have not yet been validated on the Samsung Galaxy S24 FE. Do not treat it as a high-assurance child-safety control or assume it catches every explicit image, swimsuit, video frame or application layout.
 
-## R6 safety contract
+## R7 safety contract
 
 The safety policy is independent of model labels and confidence:
 
@@ -22,9 +22,9 @@ The watchdog callbacks run on Android's main looper, separately from the screens
 
 ## How redaction works
 
-Detection and redaction localization are separate operations. EfficientDet/OpenNSFW/ViT/Gemma decide which candidate regions should be redacted. A separately pinned Google Selfie Multiclass segmentation model then classifies screenshot pixels. R6 selects only:
+Detection and redaction localization are separate operations. EfficientDet/OpenNSFW/ViT/Gemma decide which candidate regions should be redacted. A separately pinned Google Selfie Multiclass segmentation model then classifies screenshot pixels. R7 selects only:
 
-| Segmentation class | Class ID | R6 rendering |
+| Segmentation class | Class ID | R7 rendering |
 |---|---:|---|
 | Background | 0 | Visible |
 | Hair | 1 | Visible |
@@ -43,10 +43,10 @@ All artifacts are user-initiated downloads from fixed HTTPS URLs. The app verifi
 
 | Model | Responsibility | Runtime | Important limitation |
 |---|---|---|---|
-| Google EfficientDet-Lite0 | Person/object localization | TensorFlow Lite Task Vision | Not an NSFW or clothing classifier |
+| Google EfficientDet-Lite0 | Person/object localization | LiteRT Interpreter CPU (local) | Not an NSFW or clothing classifier |
 | Yahoo OpenNSFW ResNet-50 | General binary NSFW score | ONNX Runtime | Not a swimsuit classifier; old general classifier |
 | ViT-Tiny NSFW 384 | Second general NSFW score and Balanced tile fallback | ONNX Runtime | Not a swimsuit classifier; publisher-reported metrics only |
-| Google Selfie Multiclass 256×256 | Pixel classes for body skin, face, clothes, hair, accessories and background | TensorFlow Lite Task Vision | Not a content classifier; coarse mask; quality must be measured on device |
+| Google Selfie Multiclass 256×256 | Pixel classes for body skin, face, clothes, hair, accessories and background | LiteRT Interpreter CPU (local) | Not a content classifier; coarse mask; quality must be measured on device |
 | Gemma 4 E2B Instruct | Optional multimodal screenshot analysis | LiteRT-LM | Experimental, large download, prompt-injection exposure; prefer a specialist profile |
 
 The segmentation model is pinned to Google's versioned `float32/1` artifact, Apache-2.0 as declared by its Google model card. See [`docs/MODEL_GOVERNANCE.md`](docs/MODEL_GOVERNANCE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full artifact URLs, hashes, bounds and provenance.
@@ -58,7 +58,7 @@ The segmentation model is pinned to Google's versioned `float32/1` artifact, Apa
 - **Gemma 4 vision · optional:** Gemma 4 E2B plus Selfie Multiclass segmentation. About **2.6 GB plus 16–17 MB**. Text visible in screenshots can steer a language model; this profile remains experimental.
 - **Swimwear-aware · Google Open Images:** disabled and not downloadable until an Android artifact, label map, runtime contract, license and exact hash are verified.
 
-A wider model review dated 2026-11-03 also identified an experimental swimwear-labelled RT-DETRv2 detector and a five-class clothing ONNX classifier. Neither is approved for safety decisions: their training/evaluation limitations, missing neutral/reject semantics, and Android validation gaps are documented in [`docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md`](docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md). The active catalog and R6 runtime are intentionally unchanged. A second research addendum audits the Marqo ONNX classifier already integrated in R6 and compares further image-safety candidates (Freepik EVA02, Falconsai, TostAI, Blue-Eye and ShieldGemma 2) plus a product-photo swimwear model (Genlook); it recommends evaluation only and does not change the runtime. See [`docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md`](docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md).
+A wider model review dated 2026-11-03 also identified an experimental swimwear-labelled RT-DETRv2 detector and a five-class clothing ONNX classifier. Neither is approved for safety decisions: their training/evaluation limitations, missing neutral/reject semantics, and Android validation gaps are documented in [`docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md`](docs/MODEL_CANDIDATE_REVIEW_2026-11-03.md). The active catalog and R7 runtime are intentionally unchanged. A second research addendum audits the Marqo ONNX classifier already integrated in R7 and compares further image-safety candidates (Freepik EVA02, Falconsai, TostAI, Blue-Eye and ShieldGemma 2) plus a product-photo swimwear model (Genlook); it recommends evaluation only and does not change the runtime. See [`docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md`](docs/MODEL_CANDIDATE_RESEARCH_ADDENDUM_2026-11-03.md).
 
 These are approximate catalog downloads, not guarantees about on-disk storage or RAM. Gemma needs substantially more memory than specialist profiles.
 
@@ -99,7 +99,7 @@ Pinned toolchain versions are in the Gradle settings/build files. Typical local 
 
 The GitHub Actions workflow builds a debug APK for testing and a separate R8 release APK. Release signing is conditional on repository signing secrets; without them the release artifact is unsigned. Emulator lifecycle tests run on API 34 and API 36. The manual `verify-model-pins` job downloads and verifies all five model artifacts, including the large optional Gemma file.
 
-R6 defines **58 unit tests** and **28 lifecycle instrumentation tests plus 1 real-model segmenter plumbing test (29 total)** in source. These are not claimed as passing until the R6 revision itself completes GitHub Actions. Instrumentation uses synthetic detector/segmenter outputs for deterministic lifecycle tests; it does not validate real model accuracy.
+R7 defines **58 unit tests** and **28 lifecycle instrumentation tests plus 2 real-model LiteRT runtime smoke tests and 1 deterministic EfficientDet box-order contract test (31 total)** in source. These are not claimed as passing until the R7 revision itself completes GitHub Actions. Instrumentation uses synthetic detector/segmenter outputs for deterministic lifecycle tests; it does not validate real model accuracy.
 
 ## Galaxy S24 FE validation is still required
 

@@ -57,7 +57,7 @@ object SpecializedModelCatalog {
         maximumBytes = 20_000_000L,
         license = "Apache-2.0",
         sourceUrl = "https://developers.google.com/edge/mediapipe/solutions/vision/object_detector",
-        runtime = "TensorFlow Lite Task Vision (local)"
+        runtime = "LiteRT Interpreter CPU (local)"
     )
 
     val openNsfw = ApprovedModelArtifact(
@@ -101,7 +101,7 @@ object SpecializedModelCatalog {
         maximumBytes = 17_000_000L,
         license = "Apache-2.0 (Google MediaPipe model card)",
         sourceUrl = "https://developers.google.com/edge/mediapipe/solutions/vision/image_segmenter",
-        runtime = "TensorFlow Lite Task Vision · local category-mask segmentation"
+        runtime = "LiteRT Interpreter CPU (local) · local category-mask segmentation"
     )
 
     // Every profile requires the same local human segmentation stage. Detectors decide whether

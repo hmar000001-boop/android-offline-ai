@@ -15,16 +15,17 @@ sha256sum scripts/run-emulator-tests.sh scripts/install-test-app-with-grants.sh 
 # older checkout, then fail early if any duplicate fixture declaration remains.
 bash scripts/prepare-instrumentation-sources.sh
 
-# Include the exact pinned segmentation model in the instrumentation APK. This is a real model
-# initialization/inference smoke test, not a substitute for the separate full manual model audit.
-SEGMENTER_TEST_ASSETS="app/src/androidTest/assets/ci-models"
-rm -rf "$SEGMENTER_TEST_ASSETS"
-mkdir -p "$SEGMENTER_TEST_ASSETS"
+# Include the exact pinned person-detector and body-segmentation artifacts in the
+# instrumentation APK. The tests verify real CPU runtime/model plumbing, not accuracy.
+MODEL_TEST_ASSETS="app/src/androidTest/assets/ci-models"
+rm -rf "$MODEL_TEST_ASSETS"
+mkdir -p "$MODEL_TEST_ASSETS"
 if ! python3 scripts/verify-model-pins.py \
     --download \
+    --only google-efficientdet-lite0-f32 \
     --only google-selfie-multiclass-256-tflite \
-    --output-dir "$SEGMENTER_TEST_ASSETS"; then
-  echo 'Pinned body-segmentation model download/verification failed; emulator tests must not run without it.' >&2
+    --output-dir "$MODEL_TEST_ASSETS"; then
+  echo 'Pinned EfficientDet/Selfie model download or verification failed; emulator tests must not run without both verified artifacts.' >&2
   exit 1
 fi
 

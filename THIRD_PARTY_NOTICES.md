@@ -41,7 +41,7 @@ A future Google/TensorFlow Open Images detector may be evaluated as a swimwear c
 |---|---:|---|
 | LiteRT-LM Android runtime | `0.18.0` | Apache-2.0; [Google AI Edge LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) |
 | ONNX Runtime Android | `1.31.1` | MIT; [ONNX Runtime](https://github.com/microsoft/onnxruntime) |
-| TensorFlow Lite Task Vision | `0.4.4` | Apache-2.0; [TensorFlow](https://github.com/tensorflow/tflite-support) |
+| Google AI Edge LiteRT Android | `2.3.2` | Apache-2.0; [LiteRT](https://github.com/google-ai-edge/LiteRT) |
 | AndroidX Core, Activity, Lifecycle and Compose | Versions pinned in `app/build.gradle.kts` / Compose BOM | Apache-2.0; [AndroidX](https://github.com/androidx/androidx) |
 | Kotlin / Kotlin Compose compiler | `2.4.21` | Apache-2.0; [Kotlin](https://github.com/JetBrains/kotlin) |
 | Kotlin Coroutines Android | `1.10.2` | Apache-2.0; [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines) |

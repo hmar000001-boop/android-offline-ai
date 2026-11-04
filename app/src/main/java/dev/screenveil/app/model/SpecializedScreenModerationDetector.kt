@@ -3,8 +3,6 @@ package dev.screenveil.app.model
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.task.vision.detector.ObjectDetector
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -14,9 +12,9 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.FloatBuffer
 import kotlin.math.abs
-import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.pow
 
 /**
@@ -30,7 +28,7 @@ import kotlin.math.pow
 class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticStageAware {
     @Volatile
     override var diagnosticStageObserver: ((stage: String, durationMs: Long, details: String?) -> Unit)? = null
-    private var personDetector: ObjectDetector? = null
+    private var personDetector: LocalLiteRtCpuModel? = null
     private var nsfwSession: OrtSession? = null
     private var vitNsfwSession: OrtSession? = null
     private var ortEnvironment: OrtEnvironment? = null
@@ -46,14 +44,6 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
         val nsfwFile = modelFiles.require(ModelIds.OPEN_NSFW)
         val vitNsfwFile = modelFiles.find(ModelIds.VIT_NSFW)
 
-        // Standalone TensorFlow Lite Task Vision library; unlike MediaPipe Tasks, this runtime
-        // does not include MediaPipe's documented API-usage metrics collection.
-        val personOptions = ObjectDetector.ObjectDetectorOptions.builder()
-            .setScoreThreshold(PERSON_SCORE_THRESHOLD)
-            .setMaxResults(MAX_PERSON_DETECTIONS)
-            .setLabelAllowList(listOf("person"))
-            .build()
-
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
@@ -61,25 +51,34 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
         }
         var nsfw: OrtSession? = null
         var vitNsfw: OrtSession? = null
-        var person: ObjectDetector? = null
+        var person: LocalLiteRtCpuModel? = null
         try {
             nsfw = env.createSession(nsfwFile.absolutePath, options)
             if (vitNsfwFile != null) vitNsfw = env.createSession(vitNsfwFile.absolutePath, options)
-            // This model lives in context.filesDir/models, not APK assets. The Context + String
-            // overload resolves its String through AssetManager.openFd(); use the File overload
-            // so Task Vision opens the verified private-filesystem artifact via a file descriptor.
-            check(personFile.isFile && personFile.canRead()) {
-                "EfficientDet-Lite0 model is not a readable file: ${personFile.name}"
-            }
-            person = ObjectDetector.createFromFileAndOptions(personFile, personOptions)
+            // The verified model is already stored in private app storage. LiteRT maps the file
+            // directly; inference runs with the bundled CPU backend and no Task Vision JNI layer.
+            person = LocalLiteRtCpuModel(
+                modelFile = personFile,
+                expectedInputShape = intArrayOf(1, EFFICIENTDET_INPUT_SIZE, EFFICIENTDET_INPUT_SIZE, 3),
+                expectedOutputShapes = listOf(
+                    intArrayOf(1, EFFICIENTDET_MODEL_MAX_DETECTIONS, 4),
+                    intArrayOf(1, EFFICIENTDET_MODEL_MAX_DETECTIONS),
+                    intArrayOf(1, EFFICIENTDET_MODEL_MAX_DETECTIONS),
+                    intArrayOf(1)
+                )
+            )
+            // Warm up on a synthetic mid-grey tensor. This is not a screenshot and does not
+            // affect user content or the detector's safety policy.
+            val warmup = person.runFloat(FloatArray(EFFICIENTDET_INPUT_SIZE * EFFICIENTDET_INPUT_SIZE * 3))
+            validateEfficientDetOutputs(warmup)
             ortEnvironment = env
             nsfwSession = nsfw
             vitNsfwSession = vitNsfw
             personDetector = person
             activeBackend = if (vitNsfw != null) {
-                "TFLite EfficientDet-Lite0 + ONNX OpenNSFW + ViT-Tiny NSFW (local)"
+                "LiteRT CPU EfficientDet-Lite0 + ONNX OpenNSFW + ViT-Tiny NSFW (local)"
             } else {
-                "TFLite EfficientDet-Lite0 + ONNX OpenNSFW (local)"
+                "LiteRT CPU EfficientDet-Lite0 + ONNX OpenNSFW (local)"
             }
         } catch (error: Throwable) {
             runCatching { person?.close() }
@@ -103,17 +102,7 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
         // evaluated per detected person or per bounded tile below.
         val personDetectionStartedAt = if (diagnosticsEnabled) android.os.SystemClock.elapsedRealtime() else 0L
         val detections = try {
-            peopleDetector.detect(TensorImage.fromBitmap(bitmap)).mapNotNull { detection ->
-                val category = detection.categories.maxByOrNull { it.score } ?: return@mapNotNull null
-                if (category.label != "person" || category.score < PERSON_SCORE_THRESHOLD) return@mapNotNull null
-                val box = detection.boundingBox
-                val left = floor(box.left.toDouble()).toInt().coerceIn(0, bitmap.width)
-                val top = floor(box.top.toDouble()).toInt().coerceIn(0, bitmap.height)
-                val right = ceil(box.right.toDouble()).toInt().coerceIn(0, bitmap.width)
-                val bottom = ceil(box.bottom.toDouble()).toInt().coerceIn(0, bitmap.height)
-                if (right - left < MIN_PERSON_CROP_SIDE || bottom - top < MIN_PERSON_CROP_SIDE) null
-                else RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
-            }.also { found ->
+            detectPeople(bitmap, peopleDetector).also { found ->
                 if (diagnosticsEnabled) recordDiagnosticStage(
                     "Google EfficientDet-Lite0 person detection",
                     android.os.SystemClock.elapsedRealtime() - personDetectionStartedAt,
@@ -344,6 +333,87 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
         return results
     }
 
+    /**
+     * Runs the approved 320x320 EfficientDet-Lite0 float32 artifact directly through LiteRT.
+     * The pinned MediaPipe EfficientDet model's raw TFLite DetectionPostProcess outputs are:
+     * boxes [ymin,xmin,ymax,xmax], class IDs (COCO IDs offset by one), scores, then count.
+     */
+    private fun detectPeople(bitmap: Bitmap, model: LocalLiteRtCpuModel): List<RectF> {
+        check(!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
+            "Cannot run EfficientDet on an invalid screenshot bitmap"
+        }
+        val resized = Bitmap.createScaledBitmap(
+            bitmap, EFFICIENTDET_INPUT_SIZE, EFFICIENTDET_INPUT_SIZE, true
+        )
+        try {
+            val pixels = IntArray(EFFICIENTDET_INPUT_SIZE * EFFICIENTDET_INPUT_SIZE)
+            resized.getPixels(pixels, 0, EFFICIENTDET_INPUT_SIZE, 0, 0,
+                EFFICIENTDET_INPUT_SIZE, EFFICIENTDET_INPUT_SIZE)
+            val input = FloatArray(pixels.size * 3)
+            for (index in pixels.indices) {
+                val pixel = pixels[index]
+                val offset = index * 3
+                // EfficientDet-Lite0 float32 metadata uses RGB normalization mean/std 127.5.
+                input[offset] = ((pixel ushr 16 and 0xff) - 127.5f) / 127.5f
+                input[offset + 1] = ((pixel ushr 8 and 0xff) - 127.5f) / 127.5f
+                input[offset + 2] = ((pixel and 0xff) - 127.5f) / 127.5f
+            }
+            val outputs = model.runFloat(input)
+            validateEfficientDetOutputs(outputs)
+            val boxes = outputs[0]
+            val classIds = outputs[1]
+            val scores = outputs[2]
+            val count = outputs[3][0].roundToInt().coerceIn(0, scores.size)
+            val found = ArrayList<RectF>(minOf(count, MAX_PERSON_DETECTIONS))
+            for (index in 0 until count) {
+                val classValue = classIds[index]
+                val score = scores[index]
+                require(classValue.isFinite() && classValue in 1f..90f &&
+                    abs(classValue - classValue.roundToInt()) < 0.01f
+                ) {
+                    "EfficientDet returned an invalid class index at detection $index"
+                }
+                require(score.isFinite() && score in 0f..1f) {
+                    "EfficientDet returned an invalid confidence score at detection $index"
+                }
+                if (classValue.roundToInt() != PERSON_COCO_CLASS_INDEX || score < PERSON_SCORE_THRESHOLD) continue
+
+                val offset = index * 4
+                val bounds = EfficientDetBoxDecoder.toPixelBounds(
+                    output = boxes,
+                    offset = offset,
+                    imageWidth = bitmap.width,
+                    imageHeight = bitmap.height,
+                    minimumSide = MIN_PERSON_CROP_SIDE
+                ) ?: continue
+                found += bounds
+                if (found.size >= MAX_PERSON_DETECTIONS) break
+            }
+            return found
+        } finally {
+            if (resized !== bitmap && !resized.isRecycled) resized.recycle()
+        }
+    }
+
+    private fun validateEfficientDetOutputs(outputs: List<FloatArray>) {
+        require(outputs.size == 4) { "EfficientDet must return four output tensors, found ${outputs.size}" }
+        require(outputs[0].isNotEmpty() && outputs[0].size % 4 == 0) {
+            "EfficientDet boxes tensor has an unexpected element count: ${outputs[0].size}"
+        }
+        val detectionCount = outputs[0].size / 4
+        require(detectionCount == EFFICIENTDET_MODEL_MAX_DETECTIONS &&
+            outputs[1].size == detectionCount && outputs[2].size == detectionCount && outputs[3].size == 1
+        ) {
+            "EfficientDet output tensor lengths do not match the pinned [1,25,4]/[1,25]/[1,25]/[1] contract"
+        }
+        val count = outputs[3][0]
+        require(count.isFinite() && count >= 0f && count <= detectionCount.toFloat() &&
+            abs(count - count.roundToInt()) < 0.01f
+        ) {
+            "EfficientDet returned an invalid detection count"
+        }
+    }
+
     override fun close() {
         runCatching { personDetector?.close() }
         runCatching { nsfwSession?.close() }
@@ -359,6 +429,9 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
 
     companion object {
         private const val PERSON_SCORE_THRESHOLD = 0.30f
+        private const val PERSON_COCO_CLASS_INDEX = 1
+        private const val EFFICIENTDET_INPUT_SIZE = 320
+        private const val EFFICIENTDET_MODEL_MAX_DETECTIONS = 25
         private const val MAX_PERSON_DETECTIONS = 40
         private const val MAX_PERSON_CROPS = 24
         private const val MIN_PERSON_CROP_SIDE = 24

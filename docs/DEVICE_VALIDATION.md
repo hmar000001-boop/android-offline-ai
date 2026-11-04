@@ -1,17 +1,17 @@
-# Physical-device validation plan — Samsung Galaxy S24 FE (R6)
+# Physical-device validation plan — Samsung Galaxy S24 FE (R7)
 
 This plan is mandatory before considering ScreenVeil suitable for ordinary use. CI can establish source compilation, unit tests and synthetic lifecycle behavior. Only the physical Galaxy S24 FE can establish real segmentation/model compatibility, actual overlay alignment, One UI behavior, latency, memory, battery and thermal stability.
 
 ## Gate 0 — CI and model artifact integrity
 
-1. Run the R6 GitHub Actions workflow on the intended branch.
-2. Require green `build`, `release-build`, `emulator-lifecycle` API 34 and API 36 jobs.
-3. Manually run `verify-model-pins` using `workflow_dispatch`. It verifies all five catalog artifacts, including the optional large Gemma model; confirm the newly added Selfie Multiclass artifact passes the pinned SHA-256 and size bounds.
+1. Run the R7 GitHub Actions workflow on the intended branch.
+2. Require green `build`, `release-build` (including 16 KB ELF/ZIP alignment checks), and `emulator-lifecycle` API 34 and API 36 jobs.
+3. Manually run `verify-model-pins` using `workflow_dispatch`. It verifies all five catalog artifacts, including the optional large Gemma model; confirm both EfficientDet and Selfie Multiclass artifacts pass the pinned SHA-256 and size bounds.
 4. The debug APK is the controlled test artifact. The R8 release APK is unsigned unless the repository signing secrets are configured. Do not install an unsigned release APK.
 
 ## Gate 1 — install and emergency exits
 
-1. Install the R6 debug APK. If Android reports a signature conflict with an earlier debug installation, remove the older app first; this may also remove locally downloaded model files.
+1. Install the R7 debug APK. If Android reports a signature conflict with an earlier debug installation, remove the older app first; this may also remove locally downloaded model files.
 2. Open ScreenVeil. Confirm no MediaProjection/screen-recording permission flow and no Display over other apps permission request.
 3. Grant notification permission. Disable/re-enable ScreenVeil notification channel once to verify that Start is refused while the Stop notification cannot be shown.
 4. Add ScreenVeil's Quick Settings tile manually. Confirm it is labelled as a stop action; when protection is OFF, tapping it must open the app and must not start protection.
@@ -23,7 +23,7 @@ This plan is mandatory before considering ScreenVeil suitable for ordinary use. 
 ## Gate 2 — model installation and initialization
 
 1. Select **Balanced multi-model · offline**. Download EfficientDet-Lite0, Yahoo OpenNSFW, ViT-Tiny NSFW and Google Selfie Multiclass. Require successful size and SHA-256 verification for each.
-2. Confirm the segmentation model is loaded from its verified private file using TFLite Task Vision `0.4.4`; no MediaPipe Tasks runtime or analytics dependency is introduced.
+2. Confirm EfficientDet and Selfie Multiclass load from their verified private files using the bundled LiteRT `2.3.2` CPU Interpreter compatibility API; no MediaPipe Tasks runtime or analytics dependency is introduced. Verify logs reach `MODEL_INITIALIZED` and then confirm the segmenter warm-up succeeds.
 3. Confirm Fast requires EfficientDet, OpenNSFW and the same segmentation model, but not ViT or Gemma.
 4. Confirm Gemma is separate and optional; its 2.6 GB download is not required by the specialist profiles.
 5. Test interrupted downloads, disallowed redirect, hash mismatch, size overflow and low-storage behavior; incomplete files must not be marked installed.

@@ -1,11 +1,13 @@
-# Emulator test coverage — ScreenVeil 1.6.0 (R6)
+# Emulator test coverage — ScreenVeil 1.6.2 (R7)
 
-The R6 instrumentation suite is configured for `connectedDebugAndroidTest` on Android API 34 and API 36. The suite downloads only the pinned segmentation model needed by its real-runtime smoke test; detector and lifecycle cases inject deterministic outputs. A debug-only test seam provides synthetic detector, screenshot and segmentation implementations for those deterministic tests. The Android AccessibilityService, watchdog scheduling, screenshot flow, inference worker, real `OverlayController`/`WindowManager` and service lifecycle remain active where each test requires them.
+The R7 instrumentation suite is configured for `connectedDebugAndroidTest` on Android API 34 and API 36. The suite downloads the exact pinned EfficientDet and segmentation models needed by its two real-runtime smoke tests; detector and lifecycle cases inject deterministic outputs. A debug-only test seam provides synthetic detector, screenshot and segmentation implementations for those deterministic tests. The Android AccessibilityService, watchdog scheduling, screenshot flow, inference worker, real `OverlayController`/`WindowManager` and service lifecycle remain active where each test requires them.
 
-## 28 lifecycle instrumentation tests plus 1 real-model segmenter plumbing test (29 total)
+## 28 lifecycle instrumentation tests plus 2 real-model runtime smoke tests and 1 box-order contract test (31 total)
 
 | Test | What it exercises |
 |---|---|
+| `rawTfliteDetectionPostProcessBoxOrderMapsYminXminYmaxXmaxCorrectly` | Deterministically checks raw TFLite `[ymin,xmin,ymax,xmax]` mapping to pixel bounds. |
+| `pinnedEfficientDetLite0RunsAndMatchesDetectionPostProcessContract` | Downloads/verifies the exact EfficientDet-Lite0 model, executes LiteRT standalone CPU inference and validates the raw four-output tensor contract, including one-based COCO class IDs. This is runtime plumbing, not person-detection accuracy. |
 | `accessibilityComponentMatchingAcceptsAndroidFlattenedFormsOnly` | Parses Android flattened component names and rejects shell-quote characters. |
 | `cleanInstallDefaultsProtectionToOff` | Fresh install defaults to OFF. |
 | `previousReleaseOnFlagIsMigratedToOff` | Legacy persisted ON is migrated to OFF. |
@@ -49,9 +51,9 @@ Unit tests cover policy limits and category exemptions (none), model profiles/ca
 - Galaxy S24 FE latency, RAM, GPU/CPU/NPU behavior, heat, thermal throttling or battery drain.
 - Recovery if Android's main process/looper itself is completely unresponsive.
 
-The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. The explicit Stop lifecycle case also waits for a committed overlay frame and drains known pending work before stopping, following the deterministic gating pattern used in the earlier R5 failure correction. A separate instrumentation test loads the exact pinned Google segmentation artifact and invokes the real TFLite Task Vision segmenter on a synthetic frame; this proves artifact/runtime/API plumbing, not segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R6 emulator suite must not be presented as a real-model accuracy test.
+The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. The explicit Stop lifecycle case also waits for a committed overlay frame and drains known pending work before stopping, following the deterministic gating pattern used in the earlier R5 failure correction. Separate instrumentation smoke tests load the exact pinned Google EfficientDet and Selfie Multiclass artifacts and invoke the real LiteRT Interpreter CPU (local) runtime; these prove artifact/runtime/tensor-contract plumbing, not detection or segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R7 emulator suite must not be presented as a real-model accuracy test.
 
-**R6 status at package creation:** 28 lifecycle instrumentation test methods plus 1 real-model segmenter test (29 total), and 58 unit test methods are present in source. Gradle execution on API 34 and API 36 is still required; this document does not claim they have passed.
+**R7 status at package creation:** 28 lifecycle instrumentation test methods, 2 real-model runtime tests, and 1 deterministic EfficientDet box-order contract test (31 total), and 58 unit test methods are present in source. Gradle execution on API 34 and API 36 is still required; this document does not claim they have passed.
 
 ### V8 overlay-removal assertion synchronization
 
@@ -61,3 +63,8 @@ reports its safety stop. This is a bounded 8-second wait. A window that remains 
 fails the test, and the failure includes the latest status, service diagnostics, and matching
 WindowManager dump line. This avoids assuming that the status update and WindowManager's
 independently observed teardown are synchronous.
+
+
+## R7 runtime migration gate
+
+The former Task Vision library was removed. EfficientDet-Lite0 and Selfie Multiclass now use the LiteRT `2.3.2` standalone CPU `Interpreter` compatibility adapter. Two real-model plumbing tests now exercise the exact pinned models on API 34 and API 36; neither claims classification accuracy. API 36 emulator success is not a substitute for the Galaxy S24 FE ARM64 test. CI also checks 16 KB ELF/ZIP alignment of packaged 64-bit native libraries.
