@@ -23,9 +23,9 @@ The R6 instrumentation suite is configured for `connectedDebugAndroidTest` on An
 | `disablingAccessibilityWhileOverlayIsVisibleRemovesTheOverlay` | Service disable/unbind clears a visible overlay. |
 | `fiveMinuteSessionWatchdogStopsAndClearsTheOverlayWithoutBeingExtendedByStart` | Debug-shortened session timer calls the same safety stop and removes the overlay; a repeated Start request cannot extend the original deadline; production setting is 300,000 ms. |
 | `sustainedCoverageWatchdogStopsAndClearsTheOverlay` | Sustained high coverage triggers the independent scheduled watchdog and clears the overlay. |
-| `inferenceDeadlineStopsProtectionAndInvalidatesLateResults` | A stalled inference worker is poisoned process-wide; late results cannot redraw. |
+| `inferenceDeadlineStopsProtectionAndPoisonsCurrentProcess` | Waits until the injected detector is executing, then verifies the inference watchdog stop reason and process-wide poison latch. The fake detector is interruptible; this does not simulate a JNI call that ignores interruption. |
 | `inferenceDeadlineStillStopsAfterWindowGenerationChanges` | A window-generation change cannot consume the deadline for a still-hung inference worker and verifies process-wide poison. |
-| `screenshotDeadlineStopsProtectionWhenCaptureCallbackStalls` | A missing screenshot callback triggers the screenshot watchdog, process-wide poison and stop/clear. |
+| `screenshotDeadlineStopsProtectionWhenFrameProviderStalls` | Waits until the injected frame provider is executing, then verifies the screenshot watchdog stop reason and process-wide poison latch. The separate `androidWindowScreenshotApiDeliversAFrameToTheDetector` test covers the real Android screenshot API plumbing. |
 | `screenshotDeadlineStillStopsAfterWindowGenerationChanges` | A window-generation change cannot consume the deadline for a still-hung screenshot worker and verifies process-wide poison. |
 | `fullScreenDetectorBoxOnlyRedactsSegmentedBodyPixels` | A full-screen detection rectangle produces only the synthetic body-pixel mask; the rest remains transparent. |
 | `fullScreenConfirmedRegionIsRejectedByThePerRegionPixelLimit` | A full-screen EXPLICIT body mask is rejected by the 35% per-region cap. |

@@ -562,9 +562,14 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     @Test
-    fun inferenceDeadlineStopsProtectionAndInvalidatesLateResults() {
-        ScreenVeilTestHooks.inferenceTimeoutMsOverride = 350L
+    fun inferenceDeadlineStopsProtectionAndPoisonsCurrentProcess() {
+        // requestStart() only queues work on the service's main Handler. Waiting merely for
+        // !active is unsafe: that is already true before the queued Start command is processed.
+        // Confirm that the detector worker actually entered the deliberately blocked operation.
+        ScreenVeilTestHooks.inferenceTimeoutMsOverride = 900L
+        val inferenceStarted = AtomicBoolean(false)
         val detector = FakeDetector {
+            inferenceStarted.set(true)
             try {
                 Thread.sleep(5_000L)
             } catch (interrupted: InterruptedException) {
@@ -578,10 +583,19 @@ class ProtectionLifecycleInstrumentedTest {
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
-        await("inference watchdog stops a hung detector", timeoutMs = 5_000L) {
-            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        await("inference worker to enter the deliberately blocked detector", timeoutMs = 10_000L) {
+            inferenceStarted.get()
         }
-        assertTrue("A timed-out native inference worker must poison the current app process", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        await("inference watchdog to stop protection", timeoutMs = 5_000L) {
+            val state = ProtectionStatus.state.value
+            !state.active &&
+                !hasRedactionWindow() &&
+                state.error.orEmpty().contains("Inference watchdog expired", ignoreCase = true)
+        }
+        assertTrue(
+            "An expired inference watchdog must poison the current app process; state=${ProtectionStatus.state.value}",
+            ScreenProtectionAccessibilityService.isWorkerPoisonedForTest()
+        )
         assertFalse(AppPreferences(context).isProtectionEnabled())
         assertTrue("A new Start request is accepted by the service command queue", ScreenProtectionAccessibilityService.requestStart())
         await("restart refusal after a hard inference timeout", timeoutMs = 3_000L) {
@@ -592,10 +606,15 @@ class ProtectionLifecycleInstrumentedTest {
     }
 
     @Test
-    fun screenshotDeadlineStopsProtectionWhenCaptureCallbackStalls() {
-        ScreenVeilTestHooks.screenshotTimeoutMsOverride = 350L
+    fun screenshotDeadlineStopsProtectionWhenFrameProviderStalls() {
+        // The watchdog is armed before target-window selection. Use the same 900ms test
+        // deadline as the generation-change watchdog test so emulator scheduling/window scans
+        // can complete before the intentionally blocked frame provider starts.
+        ScreenVeilTestHooks.screenshotTimeoutMsOverride = 900L
+        val screenshotStarted = AtomicBoolean(false)
         ScreenVeilTestHooks.detectorFactory = { _, _ -> resultDetector() }
         ScreenVeilTestHooks.frameProvider = {
+            screenshotStarted.set(true)
             try {
                 Thread.sleep(5_000L)
             } catch (interrupted: InterruptedException) {
@@ -608,10 +627,19 @@ class ProtectionLifecycleInstrumentedTest {
         enableScreenVeilAccessibility()
         awaitAccessibilityServiceConnection()
         assertTrue(ScreenProtectionAccessibilityService.requestStart())
-        await("screenshot watchdog stops stalled capture", timeoutMs = 5_000L) {
-            !ProtectionStatus.state.value.active && !hasRedactionWindow()
+        await("screenshot worker to enter the deliberately blocked frame provider", timeoutMs = 10_000L) {
+            screenshotStarted.get()
         }
-        assertTrue("A timed-out screenshot worker must poison the current app process", ScreenProtectionAccessibilityService.isWorkerPoisonedForTest())
+        await("screenshot watchdog to stop protection", timeoutMs = 5_000L) {
+            val state = ProtectionStatus.state.value
+            !state.active &&
+                !hasRedactionWindow() &&
+                state.error.orEmpty().contains("Screenshot watchdog expired", ignoreCase = true)
+        }
+        assertTrue(
+            "An expired screenshot watchdog must poison the current app process; state=${ProtectionStatus.state.value}",
+            ScreenProtectionAccessibilityService.isWorkerPoisonedForTest()
+        )
         assertFalse(AppPreferences(context).isProtectionEnabled())
     }
 
