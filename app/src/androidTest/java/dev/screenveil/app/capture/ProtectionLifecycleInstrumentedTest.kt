@@ -1230,11 +1230,13 @@ class ProtectionLifecycleInstrumentedTest {
         @Volatile var clearCalled = false
             private set
 
+        @Suppress("UNUSED_PARAMETER")
         override fun prepare(
             frame: Bitmap,
             regions: List<DetectedMediaRegion>,
             settings: ModerationSettings,
-            screenBounds: Rect
+            screenBounds: Rect,
+            collectDiagnosticGeometry: Boolean
         ): OverlayController.PreparedOverlay = OverlayController.PreparedOverlay(
             bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888),
             screenBounds = Rect(screenBounds),
