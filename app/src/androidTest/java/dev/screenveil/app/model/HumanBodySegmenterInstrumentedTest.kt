@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -24,8 +25,9 @@ class HumanBodySegmenterInstrumentedTest {
         val frame = Bitmap.createBitmap(540, 1170, Bitmap.Config.ARGB_8888)
         val segmenter = TfliteHumanBodySegmenter()
         try {
-            // A simple non-photographic human silhouette provides deterministic non-empty input.
-            // This test validates artifact/runtime/API plumbing, not segmentation accuracy.
+            // A simple non-photographic human silhouette makes the model input deterministic.
+            // The smoke test requires a non-empty body/clothing intersection but does not claim
+            // that synthetic-shape quality predicts performance on real phone screenshots.
             Canvas(frame).apply {
                 drawColor(Color.rgb(180, 190, 205))
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(215, 170, 135) }
@@ -44,18 +46,21 @@ class HumanBodySegmenterInstrumentedTest {
             }
             assertTrue("Pinned segmentation model asset is missing or empty", modelFile.isFile && modelFile.length() > 0L)
             segmenter.initialize(appContext, ModelFiles(mapOf(ModelIds.BODY_SEGMENTER to modelFile)))
-            val mask = segmenter.segment(frame)
+            // Exercise the production path: segment the detected-person crop while keeping
+            // returned coordinates aligned to the original 540x1170 screenshot.
+            val detectedPerson = Rect(90, 220, 450, 1120)
+            val mask = segmenter.segment(frame, detectedPerson)
 
             assertEquals(256, mask.width)
             assertEquals(256, mask.height)
             assertEquals(frame.width, mask.frameWidth)
             assertEquals(frame.height, mask.frameHeight)
             assertTrue("Mask pixel count must be within the model output bounds", mask.selectedPixels in 0..(256 * 256))
-            // Exercise the inverse mapping API at corners and centre. A mask may be empty for a
-            // difficult synthetic drawing; empty candidate intersections are handled as a safe stop.
-            listOf(0 to 0, 270 to 585, 539 to 1169).forEach { (x, y) ->
-                mask.protectsFramePixel(x, y)
-            }
+            assertTrue("Pixels outside the segmented detector crop must remain transparent",
+                !mask.protectsFramePixel(detectedPerson.left - 1, detectedPerson.centerY()) &&
+                    !mask.protectsFramePixel(detectedPerson.right, detectedPerson.centerY()))
+            assertTrue("The cropped mask must map into the original detected-person rectangle",
+                mask.selectedPixelsInside(detectedPerson.left, detectedPerson.top, detectedPerson.right, detectedPerson.bottom) > 0)
         } finally {
             runCatching { segmenter.close() }
             if (!frame.isRecycled) frame.recycle()

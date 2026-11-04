@@ -32,6 +32,7 @@ import dev.screenveil.app.model.ScreenModerationDetector
 import dev.screenveil.app.model.TemporaryFrameFiles
 import dev.screenveil.app.model.SpecializedScreenModerationDetector
 import dev.screenveil.app.overlay.OverlayController
+import dev.screenveil.app.overlay.MaskGeometry
 import dev.screenveil.app.policy.CoveragePolicy
 import dev.screenveil.app.policy.ModerationPolicy
 import java.util.concurrent.ExecutorService
@@ -1144,25 +1145,58 @@ class ScreenProtectionAccessibilityService : AccessibilityService() {
                     } else {
                         val segmenter = humanBodySegmenter
                             ?: throw CoveragePolicy.BodySegmentationSafetyException("Verified body segmentation model is unavailable")
-                        val segmentationStartedAt = if (trace != null) SystemClock.elapsedRealtime() else 0L
-                        val bodyMask = try {
-                            segmenter.segment(frame)
-                        } catch (error: Throwable) {
+                        detectorRegions.mapIndexed { index, region ->
+                            val source = MaskGeometry.map(
+                                region.box,
+                                frame.width,
+                                frame.height,
+                                frame.width,
+                                frame.height
+                            )?.source ?: throw CoveragePolicy.BodySegmentationSafetyException(
+                                "Region ${index + 1} has invalid bounds before body segmentation"
+                            )
+                            // Keep a little context around the detector box for the segmenter, but
+                            // the renderer still intersects the output with the original detection
+                            // rectangle. Context can improve segmentation; it cannot enlarge redaction.
+                            val padX = maxOf(2, (source.width * 0.10f).toInt())
+                            val padY = maxOf(2, (source.height * 0.10f).toInt())
+                            val segmentationRegion = Rect(
+                                (source.left - padX).coerceAtLeast(0),
+                                (source.top - padY).coerceAtLeast(0),
+                                (source.right + padX).coerceAtMost(frame.width),
+                                (source.bottom + padY).coerceAtMost(frame.height)
+                            )
+                            val detectionRect = Rect(source.left, source.top, source.right, source.bottom)
+                            val segmentationStartedAt = SystemClock.elapsedRealtime()
+                            val bodyMask = try {
+                                segmenter.segment(frame, segmentationRegion)
+                            } catch (error: Throwable) {
+                                trace?.stage(
+                                    "Google Selfie Multiclass body segmentation region ${index + 1}",
+                                    SystemClock.elapsedRealtime() - segmentationStartedAt,
+                                    "FAILED ${error.javaClass.simpleName}: ${error.message?.take(180) ?: "no detail"}"
+                                )
+                                throw CoveragePolicy.BodySegmentationSafetyException(
+                                    "Body segmentation failed for region ${index + 1}; rectangular fallback is prohibited",
+                                    error
+                                )
+                            }
+                            val intersectingPixels = bodyMask.selectedPixelsInside(detectionRect.left, detectionRect.top, detectionRect.right, detectionRect.bottom)
                             trace?.stage(
-                                "Google Selfie Multiclass body segmentation",
+                                "Google Selfie Multiclass body segmentation region ${index + 1}",
                                 SystemClock.elapsedRealtime() - segmentationStartedAt,
-                                "FAILED ${error.javaClass.simpleName}"
+                                "mask=${bodyMask.width}x${bodyMask.height}; selectedPixels=${bodyMask.selectedPixels}; " +
+                                    "pixelsInsideDetection=$intersectingPixels; frame=${frame.width}x${frame.height}; " +
+                                    "modelRegion=${segmentationRegion.flattenToString()}"
                             )
-                            throw CoveragePolicy.BodySegmentationSafetyException(
-                                "Body segmentation failed; rectangular fallback is prohibited", error
-                            )
+                            if (intersectingPixels <= 0) {
+                                throw CoveragePolicy.BodySegmentationSafetyException(
+                                    "Segmentation produced no body/clothing pixels inside region ${index + 1} " +
+                                        "(selected=${bodyMask.selectedPixels}, intersecting=0); rectangular fallback is prohibited"
+                                )
+                            }
+                            region.copy(bodyMask = bodyMask)
                         }
-                        trace?.stage(
-                            "Google Selfie Multiclass body segmentation",
-                            SystemClock.elapsedRealtime() - segmentationStartedAt,
-                            "mask=${bodyMask.width}x${bodyMask.height}; frame=${frame.width}x${frame.height}; regions=${detectorRegions.size}"
-                        )
-                        detectorRegions.map { it.copy(bodyMask = bodyMask) }
                     }
 
                     val inferenceElapsedMs = SystemClock.elapsedRealtime() - inferencePipelineStartedAt

@@ -1,4 +1,4 @@
-# ScreenVeil 1.6.7 (R11)
+# ScreenVeil 1.6.8 (R12)
 
 ScreenVeil is an experimental Android-wide, offline screen-content redaction application. After the user explicitly enables its Android `AccessibilityService` and taps **Start protection**, it captures the active application window with Android's `takeScreenshotOfWindow()` API, performs local model inference, and draws a non-focusable, non-touchable accessibility overlay over selected pixels. It does not use `MediaProjection` or `SYSTEM_ALERT_WINDOW`.
 

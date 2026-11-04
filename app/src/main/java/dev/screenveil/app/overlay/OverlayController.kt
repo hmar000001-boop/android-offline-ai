@@ -140,8 +140,11 @@ open class OverlayController(
                     if (error is CoveragePolicy.CoverageLimitExceededException ||
                         error is CoveragePolicy.BodySegmentationSafetyException
                     ) throw error
+                    val causeDetail = error.message?.replace('\n', ' ')?.take(180) ?: "no detail"
                     throw CoveragePolicy.BodySegmentationSafetyException(
-                        "Could not safely render body/clothing mask for region ${index + 1}", error
+                        "Could not safely render body/clothing mask for region ${index + 1}: " +
+                            "${error.javaClass.simpleName}: $causeDetail",
+                        error
                     )
                 } finally {
                     rasterizedRegion?.let {

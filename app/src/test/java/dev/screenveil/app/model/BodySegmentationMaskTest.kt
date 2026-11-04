@@ -74,6 +74,28 @@ class BodySegmentationMaskTest {
         assertTrue(mask.protectsFramePixel(10, 150))
     }
 
+    @Test fun cropMaskMapsOnlyInsideItsOriginalScreenshotRegion() {
+        val mask = BodySegmentationMask.fromCategoryMask(
+            width = 2,
+            height = 2,
+            frameWidth = 100,
+            frameHeight = 200,
+            categoryBuffer = ByteBuffer.wrap(byteArrayOf(4, 4, 2, 2)),
+            dilationRadius = 0,
+            frameRegionLeft = 20,
+            frameRegionTop = 40,
+            frameRegionWidth = 40,
+            frameRegionHeight = 80
+        )
+        assertFalse(mask.protectsFramePixel(19, 80))
+        assertFalse(mask.protectsFramePixel(20, 39))
+        assertTrue(mask.protectsFramePixel(25, 50))
+        assertTrue(mask.protectsFramePixel(55, 110))
+        assertFalse(mask.protectsFramePixel(60, 120))
+        assertEquals(4, mask.selectedPixelsInside(20, 40, 60, 120))
+        assertEquals(0, mask.selectedPixelsInside(0, 0, 20, 40))
+    }
+
     @Test fun truncatedCategoryBufferIsRejected() {
         org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
             BodySegmentationMask.fromCategoryMask(2, 2, 20, 20, ByteBuffer.wrap(byteArrayOf(2, 4)), 0)

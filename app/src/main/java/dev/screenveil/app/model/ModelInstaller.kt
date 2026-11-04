@@ -24,7 +24,7 @@ object ModelInstaller {
     private const val BUFFER_SIZE = 1024 * 1024
     private const val MAX_REDIRECTS = 5
     private const val REQUIRED_FREE_SPACE_MARGIN = 250_000_000L
-    private const val USER_AGENT = "ScreenVeil-Android/1.6.7"
+    private const val USER_AGENT = "ScreenVeil-Android/1.6.8"
 
     // GitHub is limited to the exact hosts release downloads use. Wildcards remain only for
     // Hugging Face's own CDN domains; user-content GitHub subdomains are not approved.
