@@ -52,3 +52,12 @@ Unit tests cover policy limits and category exemptions (none), model profiles/ca
 The lifecycle tests inject fake detector and segmentation masks for deterministic safety scenarios. The explicit Stop lifecycle case also waits for a committed overlay frame and drains known pending work before stopping, following the deterministic gating pattern used in the earlier R5 failure correction. A separate instrumentation test loads the exact pinned Google segmentation artifact and invokes the real TFLite Task Vision segmenter on a synthetic frame; this proves artifact/runtime/API plumbing, not segmentation accuracy. The screenshot-plumbing test uses Android's real screenshot API. A green R6 emulator suite must not be presented as a real-model accuracy test.
 
 **R6 status at package creation:** 28 lifecycle instrumentation test methods plus 1 real-model segmenter test (29 total), and 58 unit test methods are present in source. Gradle execution on API 34 and API 36 is still required; this document does not claim they have passed.
+
+### V8 overlay-removal assertion synchronization
+
+The repeated-model-failure and repeated-capture-failure lifecycle tests wait for the actual
+`dumpsys window windows` snapshot to stop listing `ScreenVeil redaction` after the service
+reports its safety stop. This is a bounded 8-second wait. A window that remains present still
+fails the test, and the failure includes the latest status, service diagnostics, and matching
+WindowManager dump line. This avoids assuming that the status update and WindowManager's
+independently observed teardown are synchronous.

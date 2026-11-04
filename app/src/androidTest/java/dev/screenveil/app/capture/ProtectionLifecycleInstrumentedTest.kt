@@ -326,7 +326,10 @@ class ProtectionLifecycleInstrumentedTest {
         }
         assertTrue("The detector should have been called for initial success plus three failures", inspections.get() >= 4)
         assertFalse("Model failure must reset persisted protection", AppPreferences(context).isProtectionEnabled())
-        assertFalse("Model failure must remove the existing localized overlay", hasRedactionWindow())
+        // ProtectionStatus is published after clear() requests WindowManager removal, but
+        // dumpsys observes the WindowManager's separate window snapshot. Poll that observable
+        // state rather than assuming the snapshot updates in the same instant as the status.
+        awaitRedactionWindowRemoved("Model failure safety stop")
         assertFalse("Model failure must never leave an opaque cover", ProtectionStatus.state.value.opaqueCoverActive)
     }
 
@@ -352,7 +355,9 @@ class ProtectionLifecycleInstrumentedTest {
         }
         assertTrue("The capture provider should be exercised through the five-failure stop threshold", fakeCaptureCount.get() - beforeFailures >= 5)
         assertFalse(AppPreferences(context).isProtectionEnabled())
-        assertFalse("Capture failures must remove the existing localized overlay", hasRedactionWindow())
+        // Observe actual WindowManager removal with a bounded wait; if the window remains,
+        // awaitRedactionWindowRemoved throws with service and WindowManager diagnostics.
+        awaitRedactionWindowRemoved("Repeated capture-failure safety stop")
         assertFalse(ProtectionStatus.state.value.opaqueCoverActive)
     }
 
@@ -1114,6 +1119,33 @@ class ProtectionLifecycleInstrumentedTest {
 
     private fun hasRedactionWindow(): Boolean =
         shell("dumpsys window windows").contains("ScreenVeil redaction", ignoreCase = true)
+
+    /**
+     * ProtectionStatus and the WindowManager dump are separate observations. The service updates
+     * its status immediately after requesting overlay removal, while dumpsys may briefly report
+     * the old window during teardown. Wait for the actual window to disappear, but fail with
+     * enough evidence to distinguish delayed teardown from a genuinely retained overlay.
+     */
+    private fun awaitRedactionWindowRemoved(reason: String, timeoutMs: Long = 8_000L) {
+        try {
+            await("$reason to remove ScreenVeil redaction window", timeoutMs) {
+                !hasRedactionWindow()
+            }
+        } catch (failure: AssertionError) {
+            val windowDump = shell("dumpsys window windows")
+            val matchingLines = windowDump.lineSequence()
+                .filter { it.contains("ScreenVeil redaction", ignoreCase = true) }
+                .joinToString("\n")
+                .ifBlank { "No matching title line found in the final dump" }
+            throw AssertionError(
+                "$reason did not remove the localized overlay within ${timeoutMs}ms. " +
+                    "status=${ProtectionStatus.state.value}; " +
+                    "service=${ScreenProtectionAccessibilityService.diagnosticsForTest()}; " +
+                    "matchingWindowLines=$matchingLines",
+                failure
+            )
+        }
+    }
 
     private fun awaitAccessibilityServiceConnection() {
         try {

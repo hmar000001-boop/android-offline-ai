@@ -47,3 +47,18 @@ The API 36 run reached AndroidJUnitRunner and completed all 29 instrumentation m
 The two tests now use a 900ms debug deadline and an `AtomicBoolean` set only from inside the blocked worker operation. They first await that signal, then await all three watchdog outcomes: protection inactive, no redaction window, and the exact `Screenshot watchdog expired` / `Inference watchdog expired` diagnostic in `ProtectionStatus.error`. Only after that do they assert the process-wide poison latch. The inference test name no longer claims to validate a late result that its interruptible fake detector never actually returned; the screenshot test name now identifies the injected frame provider rather than implying this case uses the real Android screenshot callback.
 
 No production Kotlin, runtime watchdog implementation, policy, model, manifest, or CI workflow was changed for this correction. This is a test synchronization fix, not a relaxation of the production timeout / process-poison requirement. The two test changes still require a real Gradle instrumentation run on API 34 and API 36.
+
+## V8 — API 34 overlay-removal test observation
+
+The V7 API 34 run completed all 29 instrumentation tests but failed the immediate
+`hasRedactionWindow()` assertions in `repeatedModelFailuresStopAndClearAnExistingOverlay`
+and `repeatedCaptureFailuresStopAndClearAnExistingOverlay`. Both tests had already observed
+the circuit-breaker stop state. `stopForSafety()` calls `overlay.clear()` before publishing
+that state; `OverlayController.clear()` detaches the drawable and requests
+`WindowManager.removeView()`. The test then queried `dumpsys window windows` only once.
+
+V8 changes those two assertions to poll the WindowManager snapshot for up to 8 seconds. It does
+not weaken the requirement: if the redaction window remains, the test still fails and reports
+the current ProtectionStatus, service diagnostics, and matching WindowManager title line.
+No production safety logic was changed. The V8 result is not established until API 34/API 36
+GitHub Actions runs complete.
