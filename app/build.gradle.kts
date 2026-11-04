@@ -22,8 +22,8 @@ android {
         applicationId = "dev.screenveil.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.6.3"
+        versionCode = 18
+        versionName = "1.6.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -6,6 +6,7 @@ import android.graphics.RectF
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import org.tensorflow.lite.DataType
 import dev.screenveil.app.policy.ContentDecision
 import dev.screenveil.app.policy.SpecialistDecisionPolicy
 import java.io.ByteArrayInputStream
@@ -65,11 +66,12 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
                     intArrayOf(1, EFFICIENTDET_MODEL_MAX_DETECTIONS),
                     intArrayOf(1, EFFICIENTDET_MODEL_MAX_DETECTIONS),
                     intArrayOf(1)
-                )
+                ),
+                expectedInputDataType = DataType.UINT8
             )
-            // Warm up on a synthetic mid-grey tensor. This is not a screenshot and does not
+            // Warm up on a synthetic mid-grey RGB image. This is not a screenshot and does not
             // affect user content or the detector's safety policy.
-            val warmup = person.runFloat(FloatArray(EFFICIENTDET_INPUT_SIZE * EFFICIENTDET_INPUT_SIZE * 3))
+            val warmup = person.runUInt8(ByteArray(EFFICIENTDET_INPUT_SIZE * EFFICIENTDET_INPUT_SIZE * 3) { 127 })
             validateEfficientDetOutputs(warmup)
             ortEnvironment = env
             nsfwSession = nsfw
@@ -334,8 +336,8 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
     }
 
     /**
-     * Runs the approved 320x320 EfficientDet-Lite0 float32 artifact directly through LiteRT.
-     * The pinned MediaPipe EfficientDet model's raw TFLite DetectionPostProcess outputs are:
+     * Runs the approved 320x320 EfficientDet-Lite0 uint8 TensorFlow Hub TFLite artifact.
+     * Its graph includes TFLite_Detection_PostProcess and returns four tensors:
      * boxes [ymin,xmin,ymax,xmax], class IDs (COCO IDs offset by one), scores, then count.
      */
     private fun detectPeople(bitmap: Bitmap, model: LocalLiteRtCpuModel): List<RectF> {
@@ -349,16 +351,16 @@ class SpecializedScreenModerationDetector : ScreenContentDetector, DiagnosticSta
             val pixels = IntArray(EFFICIENTDET_INPUT_SIZE * EFFICIENTDET_INPUT_SIZE)
             resized.getPixels(pixels, 0, EFFICIENTDET_INPUT_SIZE, 0, 0,
                 EFFICIENTDET_INPUT_SIZE, EFFICIENTDET_INPUT_SIZE)
-            val input = FloatArray(pixels.size * 3)
+            val input = ByteArray(pixels.size * 3)
             for (index in pixels.indices) {
                 val pixel = pixels[index]
                 val offset = index * 3
-                // EfficientDet-Lite0 float32 metadata uses RGB normalization mean/std 127.5.
-                input[offset] = ((pixel ushr 16 and 0xff) - 127.5f) / 127.5f
-                input[offset + 1] = ((pixel ushr 8 and 0xff) - 127.5f) / 127.5f
-                input[offset + 2] = ((pixel and 0xff) - 127.5f) / 127.5f
+                // The pinned TensorFlow Hub TFLite deployment consumes raw RGB uint8 pixels [0,255].
+                input[offset] = (pixel ushr 16 and 0xff).toByte()
+                input[offset + 1] = (pixel ushr 8 and 0xff).toByte()
+                input[offset + 2] = (pixel and 0xff).toByte()
             }
-            val outputs = model.runFloat(input)
+            val outputs = model.runUInt8(input)
             validateEfficientDetOutputs(outputs)
             val boxes = outputs[0]
             val classIds = outputs[1]

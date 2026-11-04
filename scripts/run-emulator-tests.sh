@@ -22,7 +22,7 @@ rm -rf "$MODEL_TEST_ASSETS"
 mkdir -p "$MODEL_TEST_ASSETS"
 if ! python3 scripts/verify-model-pins.py \
     --download \
-    --only google-efficientdet-lite0-f32 \
+    --only litert-efficientdet-lite0-uint8 \
     --only google-selfie-multiclass-256-tflite \
     --output-dir "$MODEL_TEST_ASSETS"; then
   echo 'Pinned EfficientDet/Selfie model download or verification failed; emulator tests must not run without both verified artifacts.' >&2

@@ -26,6 +26,21 @@ class ModelCatalogPolicyTest {
         }
     }
 
+
+    @Test fun personDetectorUsesThePinnedFourOutputUint8TfliteDeployment() {
+        val detector = SpecializedModelCatalog.personDetector
+        assertEquals("litert-efficientdet-lite0-uint8", detector.id)
+        assertEquals("efficientdet_lite0_detection.tflite", detector.fileName)
+        assertEquals(
+            "33a3b622c7cac0762f96089353cd61495f3e993968d133af7871bfc2d5396704",
+            detector.sha256
+        )
+        assertEquals(4_561_184L, detector.minimumBytes)
+        assertEquals(4_561_184L, detector.maximumBytes)
+        assertTrue(detector.downloadUrl.contains("litert-community/efficientdet/resolve/971d935f3679eabbcce7b4d3733f351d403ff2b9/"))
+        assertEquals("LiteRT Interpreter CPU (local)", detector.runtime)
+    }
+
     @Test fun specialistProfilesNeverRequireGemma() {
         listOf(ModelProfile.BALANCED_SPECIALIZED, ModelProfile.FAST_SPECIALIZED).forEach { profile ->
             assertFalse(profile.requiredModels.any { it.id == ModelIds.GEMMA })

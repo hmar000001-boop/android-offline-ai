@@ -10,15 +10,15 @@ R7 removes `org.tensorflow:tensorflow-lite-task-vision:0.4.4` and does not add M
 
 The two existing `.tflite` models now use the standalone CPU `Interpreter` compatibility API bundled in Google AI Edge LiteRT Android `2.3.2` (`com.google.ai.edge.litert:litert:2.3.2`). The interpreter maps each verified model file from private app storage. No Play Services model runtime, remote inference, or additional telemetry client is used.
 
-This is a deliberately narrow compatibility exception to LiteRT's recommendation to use `CompiledModel` for new applications. The pinned EfficientDet model terminates in `TFLite_Detection_PostProcess`. An upstream LiteRT issue reports that `CompiledModel.createOutputBuffers()` on CPU can allocate four-byte output buffers for this operator even when the model's outputs are larger. That can cause an out-of-bounds native access. R7 therefore avoids that output-buffer path rather than attempting to work around it with unverified buffer handles. The adapter sizes direct output buffers from the runtime tensor metadata and validates the fixed `[1,25,4]`, `[1,25]`, `[1,25]`, `[1]` contract before decoding detections. The raw interpreter output follows TensorFlow Lite `TFLite_Detection_PostProcess`: `[ymin,xmin,ymax,xmax]`. This must not be confused with the `[top,left,right,bottom]` bounding-box representation exposed after MediaPipe Task API postprocessing. The model uses COCO category IDs offset by one (`CLASS_OFFSET = 1` in Google AutoML EfficientDet postprocessing), so the COCO `person` ID is 1. The integration tests validate raw coordinate ordering and the documented one-based class-ID range.
+This is a deliberately narrow compatibility exception to LiteRT's recommendation to use `CompiledModel` for new applications. R7 initially treated the old MediaPipe EfficientDet asset as a four-output `TFLite_Detection_PostProcess` model. API 34 instrumentation disproved that assumption: the old artifact exposed two outputs and relied on model metadata for external anchor decoding/NMS. That artifact and its R7 four-output contract are retired. The R9 correction below replaces the detector artifact with a separately pinned TensorFlow Hub TFLite deployment and tests its real tensor contract. The buffer-allocation rationale for using the Interpreter API remains: the adapter allocates direct input/output buffers from runtime tensor metadata and rejects mismatched contracts before decoding.
 
 ## Buffer contract and failure behavior
 
-`LocalLiteRtCpuModel` calls `allocateTensors()`, checks the model's tensor counts and FLOAT32 element types, obtains fixed tensor shapes and runtime byte counts, and rejects dynamic, oversized, or inconsistent tensor allocations. It allocates direct native-order input and output buffers once. Inference reuses those buffers on the existing single-thread model executor. Outputs are copied to owned float arrays before model-specific validation.
+`LocalLiteRtCpuModel` calls `allocateTensors()`, checks each model's tensor counts and declared input/output element types (EfficientDet RGB input is UINT8; Selfie Multiclass input is FLOAT32; postprocess outputs are FLOAT32), obtains fixed tensor shapes and runtime byte counts, and rejects dynamic, oversized, or inconsistent tensor allocations. It allocates direct native-order input and output buffers once. Inference reuses those buffers on the existing single-thread model executor. Outputs are copied to owned float arrays before model-specific validation.
 
 The EfficientDet adapter validates its four outputs, count, class indices, scores and normalized boxes before creating candidate person regions. The segmenter validates the exact 256×256×6 output before category mapping. Malformed output throws; it cannot create a permissive region or rectangle fallback.
 
-The model files, source URLs, hashes, size bounds and licenses are unchanged. No model is retrained, converted, quantized or rewritten.
+The R9 detector deployment is separately pinned at a full repository commit and exact file hash. The Selfie Multiclass, OpenNSFW, ViT-Tiny and Gemma artifact pins are unchanged. ScreenVeil does not train, convert, quantize or rewrite model weights.
 
 ## Preserved protection policy
 
@@ -37,3 +37,12 @@ This migration does not modify:
 ## Validation status
 
 The source includes real-model instrumentation smoke tests for both pinned `.tflite` artifacts and a CI check for 16 KB ELF LOAD and APK ZIP alignment of packaged 64-bit native libraries. Those tests must run in GitHub Actions on API 34 and API 36, followed by physical Galaxy S24 FE ARM64 testing. A source archive and static checks are not evidence that the APK builds or that either model's accuracy is suitable for content moderation.
+
+
+## R9 correction — EfficientDet artifact contract (2026-11-04)
+
+The first LiteRT Interpreter CI run showed that the previously pinned MediaPipe model exposes two output tensors, not four. That model uses out-of-graph SSD anchor decoding and NMS configured through `DETECTOR_METADATA`; it is not a raw four-output `TFLite_Detection_PostProcess` model. R7's four-output assumption was incorrect and is superseded by R9.
+
+R9 changes only the EfficientDet artifact to the LiteRT Community TFLite deployment of TensorFlow Hub `tensorflow/efficientdet/lite0/detection/1` at immutable commit `971d935f3679eabbcce7b4d3733f351d403ff2b9`. The upstream model repository identifies it as the TFLite deployment of that model; TensorFlow Hub documents the input as RGB `uint8` pixels in [0,255] and the outputs as boxes, scores, classes and detection count. The catalog pins the full repository commit, exact published file size and SHA-256. The runtime supplies raw RGB `uint8` bytes and continues to reject any model whose tensor count, shape, type or element byte size differs from the fixed four-output contract.
+
+The replacement is not asserted equivalent bit-for-bit to the previous MediaPipe artifact. It is the same EfficientDet-Lite0 COCO detector family with a different deployment/export. The new model's exact CPU output contract must pass the R9 real-model instrumentation test before the APK can be used. The detector category filter, score threshold, person-crop limits, segmentation and protection safety policy are unchanged.

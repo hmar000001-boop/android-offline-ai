@@ -25,11 +25,15 @@ import java.nio.channels.FileChannel
 internal class LocalLiteRtCpuModel(
     modelFile: File,
     expectedInputShape: IntArray,
-    expectedOutputShapes: List<IntArray>
+    expectedOutputShapes: List<IntArray>,
+    expectedInputDataType: DataType = DataType.FLOAT32,
+    expectedOutputDataTypes: List<DataType> = List(expectedOutputShapes.size) { DataType.FLOAT32 }
 ) : AutoCloseable {
     private val modelBuffer: MappedByteBuffer
     private val interpreter: Interpreter
     private val inputBuffer: ByteBuffer
+    private val inputDataType: DataType
+    private val outputDataTypes: List<DataType>
     private val outputBuffers: List<ByteBuffer>
     private val outputMap: MutableMap<Int, Any>
     private var closed = false
@@ -40,7 +44,8 @@ internal class LocalLiteRtCpuModel(
         }
         require(modelFile.length() > 0L) { "LiteRT model file is empty: ${modelFile.name}" }
         require(expectedInputShape.isNotEmpty() && expectedInputShape.all { it > 0 } &&
-            expectedOutputShapes.isNotEmpty() && expectedOutputShapes.all { shape -> shape.isNotEmpty() && shape.all { it > 0 } }
+            expectedOutputShapes.isNotEmpty() && expectedOutputShapes.all { shape -> shape.isNotEmpty() && shape.all { it > 0 } } &&
+            expectedOutputDataTypes.size == expectedOutputShapes.size
         ) {
             "LiteRT model contract must declare fixed, positive input and output tensor shapes"
         }
@@ -58,33 +63,47 @@ internal class LocalLiteRtCpuModel(
             check(created.inputTensorCount == 1) {
                 "Unexpected LiteRT input tensor count for ${modelFile.name}: found ${created.inputTensorCount}"
             }
-            check(created.outputTensorCount == expectedOutputShapes.size) {
-                "Unexpected LiteRT output tensor count for ${modelFile.name}: " +
-                    "expected ${expectedOutputShapes.size}, found ${created.outputTensorCount}"
+            if (created.outputTensorCount != expectedOutputShapes.size) {
+                val actualOutputContract = (0 until created.outputTensorCount).joinToString { index ->
+                    val tensor = created.getOutputTensor(index)
+                    "$index:${tensor.dataType()}${tensor.shape().contentToString()}"
+                }
+                error(
+                    "Unexpected LiteRT output tensor count for ${modelFile.name}: " +
+                        "expected ${expectedOutputShapes.size}, found ${created.outputTensorCount}; " +
+                        "actual outputs=[$actualOutputContract]"
+                )
             }
 
             val inputTensor = created.getInputTensor(0)
-            check(inputTensor.dataType() == DataType.FLOAT32) {
-                "Unsupported LiteRT input type for ${modelFile.name}: ${inputTensor.dataType()}"
+            check(inputTensor.dataType() == expectedInputDataType &&
+                inputTensor.dataType() in SUPPORTED_INPUT_DATA_TYPES
+            ) {
+                "Unsupported LiteRT input type for ${modelFile.name}: expected $expectedInputDataType, found ${inputTensor.dataType()}"
             }
             check(inputTensor.shape().contentEquals(expectedInputShape)) {
                 "Unexpected LiteRT input shape for ${modelFile.name}: " +
                     "expected ${expectedInputShape.contentToString()}, found ${inputTensor.shape().contentToString()}"
             }
-            val inputBytes = checkedTensorBytes(inputTensor.shape(), inputTensor.numBytes(), modelFile.name)
+            val inputBytes = checkedTensorBytes(
+                inputTensor.shape(), inputTensor.dataType(), inputTensor.numBytes(), modelFile.name
+            )
 
             val allocatedOutputs = ArrayList<ByteBuffer>(expectedOutputShapes.size)
             val allocatedOutputMap = LinkedHashMap<Int, Any>(expectedOutputShapes.size)
             for (index in expectedOutputShapes.indices) {
                 val tensor = created.getOutputTensor(index)
-                check(tensor.dataType() == DataType.FLOAT32) {
-                    "Unsupported LiteRT output type $index for ${modelFile.name}: ${tensor.dataType()}"
+                check(tensor.dataType() == expectedOutputDataTypes[index] &&
+                    tensor.dataType() in SUPPORTED_OUTPUT_DATA_TYPES
+                ) {
+                    "Unsupported LiteRT output type $index for ${modelFile.name}: " +
+                        "expected ${expectedOutputDataTypes[index]}, found ${tensor.dataType()}"
                 }
                 check(tensor.shape().contentEquals(expectedOutputShapes[index])) {
                     "Unexpected LiteRT output shape $index for ${modelFile.name}: " +
                         "expected ${expectedOutputShapes[index].contentToString()}, found ${tensor.shape().contentToString()}"
                 }
-                val bytes = checkedTensorBytes(tensor.shape(), tensor.numBytes(), modelFile.name)
+                val bytes = checkedTensorBytes(tensor.shape(), tensor.dataType(), tensor.numBytes(), modelFile.name)
                 val buffer = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
                 allocatedOutputs += buffer
                 allocatedOutputMap[index] = buffer
@@ -93,6 +112,8 @@ internal class LocalLiteRtCpuModel(
             modelBuffer = mapped // Keep the mapped model alive for the lifetime of Interpreter.
             interpreter = created
             inputBuffer = ByteBuffer.allocateDirect(inputBytes).order(ByteOrder.nativeOrder())
+            inputDataType = inputTensor.dataType()
+            outputDataTypes = expectedOutputDataTypes.toList()
             outputBuffers = allocatedOutputs
             outputMap = allocatedOutputMap
         } catch (error: Throwable) {
@@ -103,28 +124,57 @@ internal class LocalLiteRtCpuModel(
 
     /** Runs one float32 input tensor. The caller validates the model-specific input shape. */
     fun runFloat(input: FloatArray): List<FloatArray> {
-        check(!closed) { "LiteRT model is closed" }
+        check(inputDataType == DataType.FLOAT32) {
+            "LiteRT model expects $inputDataType input, not FLOAT32"
+        }
         require(input.isNotEmpty()) { "LiteRT input tensor cannot be empty" }
-        val requiredBytes = input.size.toLong() * Float.SIZE_BYTES
-        require(requiredBytes == inputBuffer.capacity().toLong()) {
+        require(input.size.toLong() * Float.SIZE_BYTES == inputBuffer.capacity().toLong()) {
             "LiteRT input element count mismatch: expected ${inputBuffer.capacity() / Float.SIZE_BYTES}, found ${input.size}"
         }
-
-        check(modelBuffer.limit() > 0) { "LiteRT mapped model buffer is no longer available" }
         inputBuffer.clear()
         input.forEach { inputBuffer.putFloat(it) }
+        return runPreparedInput()
+    }
+
+    /** Runs one unsigned-byte RGB input tensor (pixel values 0..255), without normalization. */
+    fun runUInt8(input: ByteArray): List<FloatArray> {
+        check(inputDataType == DataType.UINT8) {
+            "LiteRT model expects $inputDataType input, not UINT8"
+        }
+        require(input.isNotEmpty()) { "LiteRT input tensor cannot be empty" }
+        require(input.size == inputBuffer.capacity()) {
+            "LiteRT input byte count mismatch: expected ${inputBuffer.capacity()}, found ${input.size}"
+        }
+        inputBuffer.clear()
+        inputBuffer.put(input)
+        return runPreparedInput()
+    }
+
+    private fun runPreparedInput(): List<FloatArray> {
+        check(!closed) { "LiteRT model is closed" }
+        check(modelBuffer.limit() > 0) { "LiteRT mapped model buffer is no longer available" }
         inputBuffer.rewind()
         outputBuffers.forEach { it.clear() }
-
         interpreter.runForMultipleInputsOutputs(arrayOf<Any>(inputBuffer), outputMap)
 
         return outputBuffers.mapIndexed { index, buffer ->
             val readable = buffer.duplicate().order(ByteOrder.nativeOrder())
             readable.rewind()
-            check(readable.remaining() % Float.SIZE_BYTES == 0) {
-                "LiteRT output tensor $index contains a partial float"
+            when (outputDataTypes[index]) {
+                DataType.FLOAT32 -> {
+                    check(readable.remaining() % Float.SIZE_BYTES == 0) {
+                        "LiteRT output tensor $index contains a partial float"
+                    }
+                    FloatArray(readable.remaining() / Float.SIZE_BYTES) { readable.float }
+                }
+                DataType.INT32 -> {
+                    check(readable.remaining() % Int.SIZE_BYTES == 0) {
+                        "LiteRT output tensor $index contains a partial integer"
+                    }
+                    FloatArray(readable.remaining() / Int.SIZE_BYTES) { readable.int.toFloat() }
+                }
+                else -> error("Unsupported LiteRT output type at inference: ${outputDataTypes[index]}")
             }
-            FloatArray(readable.remaining() / Float.SIZE_BYTES) { readable.float }
         }
     }
 
@@ -135,7 +185,7 @@ internal class LocalLiteRtCpuModel(
         // modelBuffer is intentionally retained until Interpreter.close(); it is mapped read-only.
     }
 
-    private fun checkedTensorBytes(shape: IntArray, actualBytes: Int, modelName: String): Int {
+    private fun checkedTensorBytes(shape: IntArray, dataType: DataType, actualBytes: Int, modelName: String): Int {
         require(shape.isNotEmpty() && shape.all { it > 0 }) {
             "LiteRT tensor has a dynamic, empty or invalid shape for $modelName: ${shape.contentToString()}"
         }
@@ -146,15 +196,22 @@ internal class LocalLiteRtCpuModel(
                 "LiteRT tensor exceeds the approved allocation limit for $modelName: ${shape.contentToString()}"
             }
         }
-        val expectedBytes = Math.multiplyExact(elements, Float.SIZE_BYTES.toLong())
+        val bytesPerElement = when (dataType) {
+            DataType.FLOAT32, DataType.INT32 -> 4L
+            DataType.UINT8 -> 1L
+            else -> error("Unsupported LiteRT tensor type for $modelName: $dataType")
+        }
+        val expectedBytes = Math.multiplyExact(elements, bytesPerElement)
         require(expectedBytes == actualBytes.toLong() && expectedBytes <= Int.MAX_VALUE) {
             "LiteRT tensor byte-size mismatch for $modelName: shape=${shape.contentToString()}, " +
-                "expected=$expectedBytes, runtime=$actualBytes"
+                "type=$dataType, expected=$expectedBytes, runtime=$actualBytes"
         }
         return expectedBytes.toInt()
     }
 
     private companion object {
+        val SUPPORTED_INPUT_DATA_TYPES = setOf(DataType.FLOAT32, DataType.UINT8)
+        val SUPPORTED_OUTPUT_DATA_TYPES = setOf(DataType.FLOAT32, DataType.INT32)
         const val CPU_THREADS = 2
         const val MAX_TENSOR_ELEMENTS = 1_000_000L
         const val MAX_MODEL_BYTES = 32_000_000L

@@ -6,11 +6,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.tensorflow.lite.DataType
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Runs the exact pinned EfficientDet-Lite0 artifact with LiteRT CPU on the emulator/device. */
+/** Runs the exact pinned uint8 EfficientDet-Lite0 detection artifact with LiteRT CPU on device. */
 @RunWith(AndroidJUnit4::class)
 class EfficientDetLiteRtInstrumentedTest {
     @Test
@@ -31,11 +32,11 @@ class EfficientDetLiteRtInstrumentedTest {
     }
 
     @Test
-    fun pinnedEfficientDetLite0RunsAndMatchesDetectionPostProcessContract() {
+    fun pinnedEfficientDetLite0RunsAndMatchesFourOutputDetectionPostProcessContract() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val testContext = instrumentation.context
         val appContext = instrumentation.targetContext
-        val modelFile = File(appContext.cacheDir, "screenveil-test-efficientdet-lite0.tflite")
+        val modelFile = File(appContext.cacheDir, "screenveil-test-efficientdet-lite0-detection.tflite")
         var runtime: LocalLiteRtCpuModel? = null
         try {
             testContext.assets.open(MODEL_ASSET).use { input ->
@@ -47,13 +48,14 @@ class EfficientDetLiteRtInstrumentedTest {
                 expectedInputShape = intArrayOf(1, INPUT_SIZE, INPUT_SIZE, 3),
                 expectedOutputShapes = listOf(
                     intArrayOf(1, 25, 4), intArrayOf(1, 25), intArrayOf(1, 25), intArrayOf(1)
-                )
+                ),
+                expectedInputDataType = DataType.UINT8
             )
             runtime = activeRuntime
 
-            // Normalized neutral-grey RGB input. This exercises native model load, CPU inference,
-            // reusable TensorBuffers and the raw four-output layout without asserting accuracy.
-            val outputs = activeRuntime.runFloat(FloatArray(INPUT_SIZE * INPUT_SIZE * 3))
+            // Raw neutral-grey RGB uint8 input. This exercises native model load, CPU inference,
+            // reusable direct buffers and the four-output postprocessed detection contract.
+            val outputs = activeRuntime.runUInt8(ByteArray(INPUT_SIZE * INPUT_SIZE * 3) { 127 })
             assertEquals(4, outputs.size)
             assertTrue("Detection boxes must be [N,4]", outputs[0].isNotEmpty() && outputs[0].size % 4 == 0)
             val capacity = outputs[0].size / 4
@@ -90,6 +92,6 @@ class EfficientDetLiteRtInstrumentedTest {
 
     private companion object {
         const val INPUT_SIZE = 320
-        const val MODEL_ASSET = "ci-models/efficientdet_lite0.tflite"
+        const val MODEL_ASSET = "ci-models/efficientdet_lite0_detection.tflite"
     }
 }

@@ -24,7 +24,7 @@ object ModelInstaller {
     private const val BUFFER_SIZE = 1024 * 1024
     private const val MAX_REDIRECTS = 5
     private const val REQUIRED_FREE_SPACE_MARGIN = 250_000_000L
-    private const val USER_AGENT = "ScreenVeil-Android/1.6.0"
+    private const val USER_AGENT = "ScreenVeil-Android/1.6.5"
 
     // GitHub is limited to the exact hosts release downloads use. Wildcards remain only for
     // Hugging Face's own CDN domains; user-content GitHub subdomains are not approved.
@@ -72,13 +72,15 @@ object ModelInstaller {
         profile.selectable && profile.requiredModels.isNotEmpty() &&
             profile.requiredModels.all { hasVerifiedMarker(context, it) }
 
-    /** Remove the now-retired community clothing artifact from older app versions. */
+    /** Remove retired model artifacts and markers that are incompatible with this catalog revision. */
     fun removeRetiredArtifacts(context: Context) {
         val modelsDir = File(context.filesDir, "models")
         listOf(
             "clothing_type-tf_efficientnetv2_s.in21k_ft_in1k.onnx",
             "electblake-clothing-efficientnetv2s.verified",
-            "mediapipe-efficientdet-lite0-f32.verified",
+            "efficientdet_lite0.tflite",
+            "efficientdet_lite0.tflite.part",
+            "google-efficientdet-lite0-f32.verified",
             "clothing_type-tf_efficientnetv2_s.in21k_ft_in1k.onnx.part"
         ).forEach { name ->
             val retired = File(modelsDir, name)

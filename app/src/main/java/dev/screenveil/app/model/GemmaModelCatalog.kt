@@ -39,7 +39,7 @@ object GemmaModelCatalog {
 
 object ModelIds {
     const val GEMMA = "gemma-4-e2b-it-litert-lm"
-    const val PERSON_DETECTOR = "google-efficientdet-lite0-f32"
+    const val PERSON_DETECTOR = "litert-efficientdet-lite0-uint8"
     const val OPEN_NSFW = "yahoo-open-nsfw-onnx"
     const val VIT_NSFW = "marqo-vit-tiny-nsfw-onnx"
     const val BODY_SEGMENTER = "google-selfie-multiclass-256-tflite"
@@ -48,15 +48,15 @@ object ModelIds {
 object SpecializedModelCatalog {
     val personDetector = ApprovedModelArtifact(
         id = ModelIds.PERSON_DETECTOR,
-        displayName = "Google EfficientDet-Lite0 · Person detector",
-        repository = "Google AI Edge model storage",
-        fileName = "efficientdet_lite0.tflite",
-        downloadUrl = "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite",
-        sha256 = "40338edf5ec70d43e318b0a716a84d4564cd1802759a7a07170c7e43796dbf58",
-        minimumBytes = 13_836_895L,
-        maximumBytes = 20_000_000L,
+        displayName = "EfficientDet-Lite0 · COCO detector (uint8 TFLite)",
+        repository = "litert-community/efficientdet (TensorFlow Hub TFLite deployment)",
+        fileName = "efficientdet_lite0_detection.tflite",
+        downloadUrl = "https://huggingface.co/litert-community/efficientdet/resolve/971d935f3679eabbcce7b4d3733f351d403ff2b9/efficientdet_lite0_detection.tflite",
+        sha256 = "33a3b622c7cac0762f96089353cd61495f3e993968d133af7871bfc2d5396704",
+        minimumBytes = 4_561_184L,
+        maximumBytes = 4_561_184L,
         license = "Apache-2.0",
-        sourceUrl = "https://developers.google.com/edge/mediapipe/solutions/vision/object_detector",
+        sourceUrl = "https://huggingface.co/litert-community/efficientdet/commit/971d935f3679eabbcce7b4d3733f351d403ff2b9",
         runtime = "LiteRT Interpreter CPU (local)"
     )
 
