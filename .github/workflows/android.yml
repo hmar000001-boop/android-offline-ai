@@ -32,11 +32,14 @@ jobs:
         with:
           cmdline-tools-version: 12266719
           accept-android-sdk-licenses: true
-          packages: platform-tools
+          packages: ''
 
-      - name: Install Android SDK platform and build tools
+      - name: Install Android SDK platform and build tools (retry on bad downloads)
         run: |
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+          bash scripts/install-android-sdk-with-retries.sh \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Set up pinned Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -63,6 +66,7 @@ jobs:
         with:
           name: screenveil-build-reports
           path: |
+            sdkmanager-install-attempt-*.log
             app/build/reports/tests/
             app/build/reports/lint-results*
             build/reports/problems/problems-report.html
@@ -92,10 +96,14 @@ jobs:
         with:
           cmdline-tools-version: 12266719
           accept-android-sdk-licenses: true
-          packages: platform-tools
+          packages: ''
 
-      - name: Install Android SDK platform and build tools
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Android SDK platform and build tools (retry on bad downloads)
+        run: |
+          bash scripts/install-android-sdk-with-retries.sh \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Set up pinned Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -128,6 +136,7 @@ jobs:
         with:
           name: screenveil-release-apk
           path: |
+            sdkmanager-install-attempt-*.log
             app/build/outputs/apk/release/*.apk
             app/build/outputs/mapping/release/mapping.txt
             release-build.log
@@ -169,16 +178,23 @@ jobs:
         with:
           cmdline-tools-version: 12266719
           accept-android-sdk-licenses: true
-          packages: platform-tools
+          packages: ''
 
-      - name: Install compile and emulator SDK components
+      - name: Install compile and emulator SDK components (retry on bad downloads)
         run: |
-          sdkmanager --install \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "platforms;android-${{ matrix.api-level }}" \
-            "emulator" \
-            "system-images;android-${{ matrix.api-level }};google_apis;x86_64"
+          api_level="${{ matrix.api-level }}"
+          sdk_packages=(
+            "platforms;android-36"
+            "build-tools;36.0.0"
+            "build-tools;37.0.0"
+            "platform-tools"
+            "emulator"
+            "system-images;android-${api_level};google_apis;x86_64"
+          )
+          if [[ "$api_level" != "36" ]]; then
+            sdk_packages+=("platforms;android-${api_level}")
+          fi
+          bash scripts/install-android-sdk-with-retries.sh "${sdk_packages[@]}"
 
       - name: Set up pinned Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -197,7 +213,7 @@ jobs:
           sha256sum scripts/run-emulator-tests.sh scripts/install-test-app-with-grants.sh app/build.gradle.kts
 
       - name: Run Accessibility lifecycle tests on Android emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
           target: google_apis
@@ -226,6 +242,7 @@ jobs:
         with:
           name: screenveil-emulator-api-${{ matrix.api-level }}-reports
           path: |
+            sdkmanager-install-attempt-*.log
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
             app/build/outputs/connected_android_test_additional_output/
